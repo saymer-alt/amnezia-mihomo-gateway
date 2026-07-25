@@ -9,7 +9,7 @@
 ## ⚡ Быстрая установка (одной командой)
 
 ```bash
-curl -fsSL curl -fsSL https://raw.githubusercontent.com/saymer-alt/awg-warp-router/main/install.sh | sudo bash | sudo bash
+curl -fsSL https://raw.githubusercontent.com/saymer-alt/amnezia-mihomo-gateway/main/install.sh | sudo bash
 ```
 
 ---
