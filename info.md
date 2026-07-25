@@ -9,7 +9,7 @@
 ## ⚡ Быстрая установка (одной командой)
 
 ```bash
-curl -fsSL https://github.com/saymer-alt/amnezia-mihomo-gateway/blob/main/install.sh | sudo bash
+curl -fsSL https://github.com/saymer-alt/amnezia-mihomo-gateway/main/install.sh | sudo bash
 ```
 
 ---
