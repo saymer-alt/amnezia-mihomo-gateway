@@ -85,7 +85,7 @@ docker ps | grep amnezia-awg
 systemctl status mihomo
 
 # 2. Скачай и запусти установщик
-curl -fsSL https://raw.githubusercontent.com/ТВОЙ_НИК/awg-warp-router/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/saymer-alt/awg-warp-router/main/install.sh | sudo bash
 
 # 3. Проверь, что клиент выходит с IP WARP
 # (с подключённого устройства зайди на 2ip.ru или ifconfig.co)
@@ -96,7 +96,7 @@ curl -fsSL https://raw.githubusercontent.com/ТВОЙ_НИК/awg-warp-router/mai
 ## Пошаговая установка (ручная)
 
 ```bash
-git clone https://github.com/ТВОЙ_НИК/awg-warp-router.git
+git clone https://github.com/saymer-alt/awg-warp-router.git
 cd awg-warp-router
 chmod +x install.sh uninstall.sh
 sudo ./install.sh
