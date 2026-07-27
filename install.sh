@@ -1,8 +1,8 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.3)
-# Включает: жесткую фиксацию resolv.conf, разделение DNS,
-# именованную таблицу, логирование и кросс-дистрибутивность.
+# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.5)
+# Включает: полное отключение systemd-resolved, статический resolv.conf,
+# разделение DNS, именованную таблицу, логирование и кросс-дистрибутивность.
 # =========================================================
 
 set -e
@@ -58,11 +58,11 @@ PROXY_IF="tun-mihomo"
 TABLE_ID="100"
 TABLE_NAME="mihomo"
 
-echo -e "${GREEN}Настройки определены:"
+echo -e "${GREEN}Настройки определены:${NC}"
 echo -e " - Сеть Docker: $DOCKER_NETS"
 echo -e " - Порт AWG:    $WG_PORT"
 echo -e " - Интерфейс:   $HOST_IF"
-echo -e " - Прокси TUN:  $PROXY_IF${NC}"
+echo -e " - Прокси TUN:  $PROXY_IF"
 
 # 2. Настройка ядра
 echo -e "${YELLOW}[*] Настройка sysctl...${NC}"
@@ -80,7 +80,10 @@ if ! grep -q "^$TABLE_ID $TABLE_NAME$" /etc/iproute2/rt_tables; then
 fi
 
 # 2.6 КРИТИЧЕСКИЙ ФИКС: Жесткая статика DNS для хоста
-echo -e "${YELLOW}[*] Настройка DNS (статический resolv.conf)...${NC}"
+echo -e "${YELLOW}[*] Настройка DNS (отключение systemd-resolved и статика resolv.conf)...${NC}"
+# Отключаем systemd-resolved, если он активен (Ubuntu)
+systemctl disable --now systemd-resolved 2>/dev/null || true
+
 # Снимаем блокировку immutable, если она была
 chattr -i /etc/resolv.conf 2>/dev/null || true
 # Удаляем симлинк или старый файл
@@ -261,13 +264,10 @@ systemctl daemon-reload
 systemctl enable --now warp-docker-routing.service
 systemctl enable --now check-warp-routing.timer
 
-echo -e "${GREEN}========================================================"
-echo -e "УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО!"
-echo -e "========================================================"
+echo -e "${GREEN}========================================================${NC}"
+echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО!${NC}"
+echo -e "${GREEN}========================================================${NC}"
 echo -e "${YELLOW}ВНИМАНИЕ! Обязательные настройки в config.yaml Mihomo:${NC}"
 echo -e "  1. fake-ip-range: 240.0.0.1/4  (использовать только этот диапазон!)"
 echo -e "  2. inet4-address: 198.18.0.1/30"
-echo -e "  3. auto-route: false           (строго false!)"
-echo -e "${NC}Если Mihomo только что перезапускался, дай ему 5 секунд и проверь статус:"
-echo -e "  systemctl status warp-docker-routing.service"
-echo -e "  journalctl -t warp-routing -e  (посмотреть логи применения правил)${NC}"
+echo -e "  3. auto-route: false           (строго false!)${NC}"
