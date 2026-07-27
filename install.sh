@@ -1,8 +1,8 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.5)
-# Включает: полное отключение systemd-resolved, статический resolv.conf,
-# разделение DNS, именованную таблицу, логирование и кросс-дистрибутивность.
+# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.6)
+# Включает: дружелюбный к Windows диапазон Fake-IP (198.18.0.0/16),
+# авто-патч config.yaml Mihomo, отключение systemd-resolved, разделение DNS.
 # =========================================================
 
 set -e
@@ -57,6 +57,8 @@ HOST_IF=$(ip -o -4 route show to default | awk '{print $5}')
 PROXY_IF="tun-mihomo"
 TABLE_ID="100"
 TABLE_NAME="mihomo"
+FAKE_IP_RANGE="198.18.0.0/16"
+TUN_INET_ADDR="10.255.255.1/30"
 
 echo -e "${GREEN}Настройки определены:${NC}"
 echo -e " - Сеть Docker: $DOCKER_NETS"
@@ -81,20 +83,15 @@ fi
 
 # 2.6 КРИТИЧЕСКИЙ ФИКС: Жесткая статика DNS для хоста
 echo -e "${YELLOW}[*] Настройка DNS (отключение systemd-resolved и статика resolv.conf)...${NC}"
-# Отключаем systemd-resolved, если он активен (Ubuntu)
 systemctl disable --now systemd-resolved 2>/dev/null || true
 
-# Снимаем блокировку immutable, если она была
 chattr -i /etc/resolv.conf 2>/dev/null || true
-# Удаляем симлинк или старый файл
 rm -f /etc/resolv.conf
-# Пишем прямые DNS сервера
 cat << 'EOF' > /etc/resolv.conf
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 options timeout:2 attempts:3
 EOF
-# Блокируем файл от перезаписи Mihomo, NetworkManager или DHCP
 chattr +i /etc/resolv.conf
 
 # Docker использует шлюз docker0, чтобы получать фейковые IP от Mihomo напрямую
@@ -113,6 +110,20 @@ EOF
     fi
 fi
 
+# 2.7 Авто-патч config.yaml Mihomo (смена диапазонов)
+echo -e "${YELLOW}[*] Поиск и патч config.yaml Mihomo...${NC}"
+MIHOMO_CONFIG=$(find /etc/mihomo /opt/mihomo -name "config.yaml" 2>/dev/null | head -n1)
+if [ -n "$MIHOMO_CONFIG" ]; then
+    echo -e "${GREEN}    Найден конфиг: $MIHOMO_CONFIG${NC}"
+    # Меняем fake-ip-range
+    sed -i -E "s|fake-ip-range:.*|fake-ip-range: $FAKE_IP_RANGE|g" "$MIHOMO_CONFIG"
+    # Меняем inet4-address
+    sed -i -E "s|inet4-address:.*|inet4-address: $TUN_INET_ADDR|g" "$MIHOMO_CONFIG"
+    echo -e "${GREEN}    Диапазоны успешно обновлены в конфиге.${NC}"
+else
+    echo -e "${YELLOW}    Конфиг config.yaml не найден автоматически. Проверьте настройки вручную!${NC}"
+fi
+
 # 3. Скрипт маршрутизации
 echo -e "${YELLOW}[*] Создание скрипта маршрутизации...${NC}"
 cat << EOF > /usr/local/sbin/warp-docker-routing.sh
@@ -124,13 +135,14 @@ DOCKER_NETS="$DOCKER_NETS"
 WG_PORT="$WG_PORT"
 TABLE_ID="$TABLE_ID"
 HOST_IF="$HOST_IF"
+FAKE_IP_RANGE="$FAKE_IP_RANGE"
 
 if [ "\${1:-}" = "cleanup" ]; then
     logger "warp-routing: Выполняется очистка правил..."
     ip rule del fwmark 0x88 lookup main priority 40 2>/dev/null || true
     ip rule del from "\$DOCKER_NETS" lookup "\$TABLE_ID" priority 100 2>/dev/null || true
     ip route del default table "\$TABLE_ID" 2>/dev/null || true
-    ip route del 240.0.0.0/4 dev "\$PROXY_IF" 2>/dev/null || true
+    ip route del "\$FAKE_IP_RANGE" dev "\$PROXY_IF" 2>/dev/null || true
     iptables -t mangle -D PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || true
     iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
     iptables -t nat -D POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || true
@@ -150,7 +162,6 @@ if ! ip link show "\$PROXY_IF" >/dev/null 2>&1; then
     exit 1
 fi
 
-# Очистка старых правил перед добавлением
 ip rule del fwmark 0x88 lookup main priority 40 2>/dev/null || true
 ip rule del from "\$DOCKER_NETS" lookup "\$TABLE_ID" priority 100 2>/dev/null || true
 iptables -t mangle -D PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || true
@@ -158,15 +169,13 @@ iptables -t nat -D POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || true
 iptables -D FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
 iptables -D FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
 
-# Маршруты
 ip route replace default dev "\$PROXY_IF" table "\$TABLE_ID"
-ip route replace 240.0.0.0/4 dev "\$PROXY_IF"
+ip route replace "\$FAKE_IP_RANGE" dev "\$PROXY_IF"
 logger "warp-routing: Маршруты обновлены."
 
 ip rule add from "\$DOCKER_NETS" lookup "\$TABLE_ID" priority 100 2>/dev/null || true
 ip rule add fwmark 0x88 lookup main priority 40 2>/dev/null || true
 
-# Iptables правила
 iptables -t mangle -C PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || \
 iptables -t mangle -I PREROUTING 1 -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88
 
@@ -258,16 +267,27 @@ OnUnitActiveSec=1min
 WantedBy=timers.target
 EOF
 
-# 6. Запуск
+# 6. Перезапуск Mihomo (чтобы применился новый config.yaml)
+if systemctl list-unit-files | grep -q "^mihomo.service"; then
+    systemctl restart mihomo.service
+elif command -v docker >/dev/null 2>&1; then
+    MIHOMO_C=$(docker ps -a --format '{{.Names}}' | grep "mihomo" | head -n1)
+    if [ -n "$MIHOMO_C" ]; then
+        docker restart "$MIHOMO_C"
+    fi
+fi
+sleep 3
+
+# 7. Запуск маршрутизации
 echo -e "${YELLOW}[*] Перезагрузка systemd и запуск...${NC}"
 systemctl daemon-reload
 systemctl enable --now warp-docker-routing.service
 systemctl enable --now check-warp-routing.timer
 
 echo -e "${GREEN}========================================================${NC}"
-echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО!${NC}"
+echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.6)${NC}"
 echo -e "${GREEN}========================================================${NC}"
-echo -e "${YELLOW}ВНИМАНИЕ! Обязательные настройки в config.yaml Mihomo:${NC}"
-echo -e "  1. fake-ip-range: 240.0.0.1/4  (использовать только этот диапазон!)"
-echo -e "  2. inet4-address: 198.18.0.1/30"
-echo -e "  3. auto-route: false           (строго false!)${NC}"
+echo -e "${YELLOW}Скрипт автоматически пропатчил config.yaml Mihomo:${NC}"
+echo -e "  1. fake-ip-range: $FAKE_IP_RANGE  (Дружелюбно к Windows)"
+echo -e "  2. inet4-address: $TUN_INET_ADDR"
+echo -e "  3. auto-route: false             (Проверьте вручную, должно быть false!)${NC}"
