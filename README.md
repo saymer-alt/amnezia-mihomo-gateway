@@ -96,8 +96,7 @@ curl -fsSL https://raw.githubusercontent.com/saymer-alt/awg-warp-router/main/ins
 ## Пошаговая установка (ручная)
 
 ```bash
-git clone https://github.com/saymer-alt/awg-warp-router.git
-cd awg-warp-router
+install.sh
 chmod +x install.sh uninstall.sh
 sudo ./install.sh
 ```
