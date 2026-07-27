@@ -1,6 +1,7 @@
 #!/bin/bash
 # =========================================================
 # AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready)
+# Версия с фиксом коллизии Fake-IP и Docker-мостов
 # =========================================================
 
 set -e
@@ -70,7 +71,7 @@ EOF
 sysctl -p /etc/sysctl.d/99-amnezia-mihomo.conf > /dev/null
 for i in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "$i"; done
 
-# 3. Скрипт маршрутизации (с защитой от дублирования правил)
+# 3. Скрипт маршрутизации (с защитой от дублей и фиксом Fake-IP)
 echo -e "${YELLOW}[*] Создание скрипта маршрутизации...${NC}"
 cat << EOF > /usr/local/sbin/warp-docker-routing.sh
 #!/bin/sh
@@ -86,6 +87,8 @@ if [ "\${1:-}" = "cleanup" ]; then
     ip rule del fwmark 0x88 lookup main priority 40 2>/dev/null || true
     ip rule del from "\$DOCKER_NETS" lookup "\$TABLE_ID" priority 100 2>/dev/null || true
     ip route del default table "\$TABLE_ID" 2>/dev/null || true
+    # Удаляем маршрут для Fake-IP диапазона
+    ip route del 240.0.0.0/4 dev "\$PROXY_IF" 2>/dev/null || true
     iptables -t mangle -D PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || true
     iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
     iptables -t nat -D POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || true
@@ -110,6 +113,11 @@ iptables -D FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
 iptables -D FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
 
 ip route replace default dev "\$PROXY_IF" table "\$TABLE_ID"
+
+# Фикс коллизии Fake-IP: добавляем маршрут для зарезервированного диапазона в TUN-интерфейс
+# Это спасает от Network is unreachable при резолве доменов на самом VPS
+ip route replace 240.0.0.0/4 dev "\$PROXY_IF"
+
 ip rule add from "\$DOCKER_NETS" lookup "\$TABLE_ID" priority 100 2>/dev/null || true
 ip rule add fwmark 0x88 lookup main priority 40 2>/dev/null || true
 
@@ -212,3 +220,9 @@ systemctl enable --now check-warp-routing.timer
 echo -e "${GREEN}========================================================"
 echo -e "УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО!"
 echo -e "========================================================"
+echo -e "${YELLOW}ВНИМАНИЕ! Обязательные настройки в config.yaml Mihomo:${NC}"
+echo -e "  1. fake-ip-range: 240.0.0.1/4  (использовать только этот диапазон!)"
+echo -e "  2. inet4-address: 198.18.0.1/30"
+echo -e "  3. auto-route: false           (строго false!)"
+echo -e "${NC}Если Mihomo только что перезапускался, дай ему 5 секунд и проверь статус:"
+echo -e "  systemctl status warp-docker-routing.service"
