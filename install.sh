@@ -1,7 +1,8 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.7.4)
-# Фикс: удалена жесткая зависимость Requires, безопасный запуск.
+# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.6)
+# Включает: дружелюбный к Windows диапазон Fake-IP (198.18.0.0/16),
+# авто-патч config.yaml Mihomo, отключение systemd-resolved, разделение DNS.
 # =========================================================
 
 set -e
@@ -109,20 +110,16 @@ EOF
     fi
 fi
 
-# 2.7 Авто-патч config.yaml Mihomo
+# 2.7 Авто-патч config.yaml Mihomo (смена диапазонов)
 echo -e "${YELLOW}[*] Поиск и патч config.yaml Mihomo...${NC}"
 MIHOMO_CONFIG=$(find /etc/mihomo /opt/mihomo -name "config.yaml" 2>/dev/null | head -n1)
 if [ -n "$MIHOMO_CONFIG" ]; then
     echo -e "${GREEN}    Найден конфиг: $MIHOMO_CONFIG${NC}"
-    
-    # Меняем fake-ip-range и inet4-address
+    # Меняем fake-ip-range
     sed -i -E "s|fake-ip-range:.*|fake-ip-range: $FAKE_IP_RANGE|g" "$MIHOMO_CONFIG"
+    # Меняем inet4-address
     sed -i -E "s|inet4-address:.*|inet4-address: $TUN_INET_ADDR|g" "$MIHOMO_CONFIG"
-    
-    # Безопасно меняем auto-route на false только в секции tun:
-    awk '/^tun:/{f=1} f&&/auto-route:/{sub(/auto-route:.*/, "auto-route: false"); f=0} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
-    
-    echo -e "${GREEN}    Диапазоны и auto-route: false успешно применены.${NC}"
+    echo -e "${GREEN}    Диапазоны успешно обновлены в конфиге.${NC}"
 else
     echo -e "${YELLOW}    Конфиг config.yaml не найден автоматически. Проверьте настройки вручную!${NC}"
 fi
@@ -147,7 +144,7 @@ if [ "\${1:-}" = "cleanup" ]; then
     ip route del default table "\$TABLE_ID" 2>/dev/null || true
     ip route del "\$FAKE_IP_RANGE" dev "\$PROXY_IF" 2>/dev/null || true
     iptables -t mangle -D PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || true
-    iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 2>/dev/null || true
+    iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
     iptables -t nat -D POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || true
     iptables -D FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
@@ -159,20 +156,8 @@ logger "warp-routing: Запуск применения правил..."
 
 for i in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "\$i"; done
 
-# Ждем появления интерфейса Mihomo (до 30 секунд)
 if ! ip link show "\$PROXY_IF" >/dev/null 2>&1; then
-    logger "warp-routing: Интерфейс '\$PROXY_IF' не найден. Ожидание Mihomo..."
-    echo "Waiting for Mihomo interface..."
-    for i in \$(seq 1 15); do
-        if ip link show "\$PROXY_IF" >/dev/null 2>&1; then
-            break
-        fi
-        sleep 2
-    done
-fi
-
-if ! ip link show "\$PROXY_IF" >/dev/null 2>&1; then
-    logger "warp-routing: ОШИБКА - Интерфейс '\$PROXY_IF' так и не появился."
+    logger "warp-routing: ОШИБКА - Интерфейс '\$PROXY_IF' не существует."
     echo "Error: Interface '\$PROXY_IF' does not exist."
     exit 1
 fi
@@ -194,9 +179,8 @@ ip rule add fwmark 0x88 lookup main priority 40 2>/dev/null || true
 iptables -t mangle -C PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || \
 iptables -t mangle -I PREROUTING 1 -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88
 
-# Жесткая фиксация MSS для предотвращения фрагментации в туннелях (ускоряет скорость)
-iptables -t mangle -C FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 2>/dev/null || \
-iptables -t mangle -A FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280
+iptables -t mangle -C FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+iptables -t mangle -A FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 
 iptables -t nat -C POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || \
 iptables -t nat -A POSTROUTING -o "\$PROXY_IF" -j MASQUERADE
@@ -301,10 +285,9 @@ systemctl enable --now warp-docker-routing.service
 systemctl enable --now check-warp-routing.timer
 
 echo -e "${GREEN}========================================================${NC}"
-echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.7.4)${NC}"
+echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.6)${NC}"
 echo -e "${GREEN}========================================================${NC}"
 echo -e "${YELLOW}Скрипт автоматически пропатчил config.yaml Mihomo:${NC}"
-echo -e "  1. fake-ip-range: $FAKE_IP_RANGE"
+echo -e "  1. fake-ip-range: $FAKE_IP_RANGE  (Дружелюбно к Windows)"
 echo -e "  2. inet4-address: $TUN_INET_ADDR"
-echo -e "  3. auto-route: false (Защита от потери SSH)"
-echo -e "  4. Оптимизация скорости: TCPMSS --set-mss 1280${NC}"
+echo -e "  3. auto-route: false             (Проверьте вручную, должно быть false!)${NC}"
