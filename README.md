@@ -85,9 +85,7 @@ docker ps | grep amnezia-awg
 systemctl status mihomo
 
 # 2. Скачай и запусти установщик
-curl -fsSL https://raw.githubusercontent.com/saymer-alt/amnezia-mihomo-gateway/main/install.sh -o install.sh
-chmod +x install.sh
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/saymer-alt/amnezia-mihomo-gateway/main/install.sh | sudo bash
 
 # 3. Проверь, что клиент выходит с IP WARP
 # (с подключённого устройства зайди на 2ip.ru или ifconfig.co)
