@@ -1,7 +1,8 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.7.1)
-# Фикс: безопасная замена стека TUN только в секции tun.
+# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.7.2)
+# Фикс: убран нестабильный стек mixed, добавлен авто-патч auto-route: false.
+# Оптимизация: Жесткий MSS (1280).
 # =========================================================
 
 set -e
@@ -109,7 +110,7 @@ EOF
     fi
 fi
 
-# 2.7 Авто-патч config.yaml Mihomo (БЕЗОПАСНАЯ ЗАМЕНА)
+# 2.7 Авто-патч config.yaml Mihomo
 echo -e "${YELLOW}[*] Поиск и патч config.yaml Mihomo...${NC}"
 MIHOMO_CONFIG=$(find /etc/mihomo /opt/mihomo -name "config.yaml" 2>/dev/null | head -n1)
 if [ -n "$MIHOMO_CONFIG" ]; then
@@ -119,10 +120,10 @@ if [ -n "$MIHOMO_CONFIG" ]; then
     sed -i -E "s|fake-ip-range:.*|fake-ip-range: $FAKE_IP_RANGE|g" "$MIHOMO_CONFIG"
     sed -i -E "s|inet4-address:.*|inet4-address: $TUN_INET_ADDR|g" "$MIHOMO_CONFIG"
     
-    # Безопасно меняем стек только в секции tun:
-    awk '/^tun:/{f=1} f&&/stack:/{sub(/stack:.*/, "stack: mixed"); f=0} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
+    # Безопасно меняем auto-route на false только в секции tun:
+    awk '/^tun:/{f=1} f&&/auto-route:/{sub(/auto-route:.*/, "auto-route: false"); f=0} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
     
-    echo -e "${GREEN}    Диапазоны и стек mixed успешно применены (безопасно).${NC}"
+    echo -e "${GREEN}    Диапазоны и auto-route: false успешно применены.${NC}"
 else
     echo -e "${YELLOW}    Конфиг config.yaml не найден автоматически. Проверьте настройки вручную!${NC}"
 fi
@@ -289,10 +290,10 @@ systemctl enable --now warp-docker-routing.service
 systemctl enable --now check-warp-routing.timer
 
 echo -e "${GREEN}========================================================${NC}"
-echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.7.1)${NC}"
+echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.7.2)${NC}"
 echo -e "${GREEN}========================================================${NC}"
 echo -e "${YELLOW}Скрипт автоматически пропатчил config.yaml Mihomo:${NC}"
 echo -e "  1. fake-ip-range: $FAKE_IP_RANGE"
 echo -e "  2. inet4-address: $TUN_INET_ADDR"
-echo -e "  3. stack: mixed (Оптимизация скорости TCP)"
-echo -e "  4. auto-route: false (Проверьте вручную, должно быть false!)${NC}"
+echo -e "  3. auto-route: false (Защита от потери SSH)"
+echo -e "  4. Оптимизация скорости: TCPMSS --set-mss 1280${NC}"
