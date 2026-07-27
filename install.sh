@@ -1,8 +1,8 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.2)
-# Включает: фикс коллизии Fake-IP, разделение DNS (Host vs Docker),
-# именованную таблицу маршрутизации, логирование и кросс-дистрибутивность (Ubuntu/Debian).
+# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.3)
+# Включает: жесткую фиксацию resolv.conf, разделение DNS,
+# именованную таблицу, логирование и кросс-дистрибутивность.
 # =========================================================
 
 set -e
@@ -79,36 +79,22 @@ if ! grep -q "^$TABLE_ID $TABLE_NAME$" /etc/iproute2/rt_tables; then
     echo "$TABLE_ID $TABLE_NAME" >> /etc/iproute2/rt_tables
 fi
 
-# 2.6 КРИТИЧЕСКИЙ ФИКС: Разделение DNS (Хост напрямую, Docker через Mihomo)
-echo -e "${YELLOW}[*] Настройка DNS (избежание коллизий Fake-IP)...${NC}"
-
-# Проверяем, используется ли systemd-resolved (как в Ubuntu)
-if command -v resolvectl >/dev/null 2>&1 && systemctl is-active systemd-resolved >/dev/null 2>&1; then
-    echo -e "${YELLOW}    Обнаружен systemd-resolved. Настройка через resolved.conf...${NC}"
-    cat << 'EOF' > /etc/systemd/resolved.conf
-[Resolve]
-DNS=1.1.1.1 8.8.8.8
-FallbackDNS=9.9.9.9
-Domains=
-EOF
-    systemctl restart systemd-resolved
-    resolvectl domain tun-mihomo "" 2>/dev/null || true
-    resolvectl flush-caches 2>/dev/null || true
-else
-    echo -e "${YELLOW}    systemd-resolved не найден или не активен (Debian). Прямая запись в /etc/resolv.conf...${NC}"
-    # Если /etc/resolv.conf является симлинком (например, на stub-resolv.conf), удаляем его
-    if [ -L /etc/resolv.conf ]; then
-        rm -f /etc/resolv.conf
-    fi
-    # Прописываем прямые DNS сервера
-    cat << 'EOF' > /etc/resolv.conf
+# 2.6 КРИТИЧЕСКИЙ ФИКС: Жесткая статика DNS для хоста
+echo -e "${YELLOW}[*] Настройка DNS (статический resolv.conf)...${NC}"
+# Снимаем блокировку immutable, если она была
+chattr -i /etc/resolv.conf 2>/dev/null || true
+# Удаляем симлинк или старый файл
+rm -f /etc/resolv.conf
+# Пишем прямые DNS сервера
+cat << 'EOF' > /etc/resolv.conf
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 options timeout:2 attempts:3
 EOF
-fi
+# Блокируем файл от перезаписи Mihomo, NetworkManager или DHCP
+chattr +i /etc/resolv.conf
 
-# Docker использует шлюз docker0, чтобы получать фейковые IP от Mihomo
+# Docker использует шлюз docker0, чтобы получать фейковые IP от Mihomo напрямую
 DOCKER_GW=$(ip -4 addr show docker0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
 if [ -n "$DOCKER_GW" ]; then
     echo -e "${YELLOW}[*] Настройка Docker DNS (daemon.json -> $DOCKER_GW)...${NC}"
