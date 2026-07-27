@@ -1,8 +1,7 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.6)
-# Включает: дружелюбный к Windows диапазон Fake-IP (198.18.0.0/16),
-# авто-патч config.yaml Mihomo, отключение systemd-resolved, разделение DNS.
+# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.7)
+# Оптимизация: Стек mixed, жесткий MSS (1280), дружелюбный Fake-IP.
 # =========================================================
 
 set -e
@@ -110,7 +109,7 @@ EOF
     fi
 fi
 
-# 2.7 Авто-патч config.yaml Mihomo (смена диапазонов)
+# 2.7 Авто-патч config.yaml Mihomo (оптимизация и смена диапазонов)
 echo -e "${YELLOW}[*] Поиск и патч config.yaml Mihomo...${NC}"
 MIHOMO_CONFIG=$(find /etc/mihomo /opt/mihomo -name "config.yaml" 2>/dev/null | head -n1)
 if [ -n "$MIHOMO_CONFIG" ]; then
@@ -119,7 +118,9 @@ if [ -n "$MIHOMO_CONFIG" ]; then
     sed -i -E "s|fake-ip-range:.*|fake-ip-range: $FAKE_IP_RANGE|g" "$MIHOMO_CONFIG"
     # Меняем inet4-address
     sed -i -E "s|inet4-address:.*|inet4-address: $TUN_INET_ADDR|g" "$MIHOMO_CONFIG"
-    echo -e "${GREEN}    Диапазоны успешно обновлены в конфиге.${NC}"
+    # Меняем стек TUN на mixed для максимальной производительности TCP
+    sed -i -E "s|stack:.*|stack: mixed|g" "$MIHOMO_CONFIG"
+    echo -e "${GREEN}    Диапазоны и стек mixed успешно применены.${NC}"
 else
     echo -e "${YELLOW}    Конфиг config.yaml не найден автоматически. Проверьте настройки вручную!${NC}"
 fi
@@ -144,7 +145,7 @@ if [ "\${1:-}" = "cleanup" ]; then
     ip route del default table "\$TABLE_ID" 2>/dev/null || true
     ip route del "\$FAKE_IP_RANGE" dev "\$PROXY_IF" 2>/dev/null || true
     iptables -t mangle -D PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || true
-    iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+    iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 2>/dev/null || true
     iptables -t nat -D POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || true
     iptables -D FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
@@ -179,8 +180,9 @@ ip rule add fwmark 0x88 lookup main priority 40 2>/dev/null || true
 iptables -t mangle -C PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || \
 iptables -t mangle -I PREROUTING 1 -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88
 
-iptables -t mangle -C FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
-iptables -t mangle -A FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+# Жесткая фиксация MSS для предотвращения фрагментации в туннелях (ускоряет скорость)
+iptables -t mangle -C FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 2>/dev/null || \
+iptables -t mangle -A FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280
 
 iptables -t nat -C POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || \
 iptables -t nat -A POSTROUTING -o "\$PROXY_IF" -j MASQUERADE
@@ -285,9 +287,10 @@ systemctl enable --now warp-docker-routing.service
 systemctl enable --now check-warp-routing.timer
 
 echo -e "${GREEN}========================================================${NC}"
-echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.6)${NC}"
+echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.7 - Optimized)${NC}"
 echo -e "${GREEN}========================================================${NC}"
 echo -e "${YELLOW}Скрипт автоматически пропатчил config.yaml Mihomo:${NC}"
-echo -e "  1. fake-ip-range: $FAKE_IP_RANGE  (Дружелюбно к Windows)"
+echo -e "  1. fake-ip-range: $FAKE_IP_RANGE"
 echo -e "  2. inet4-address: $TUN_INET_ADDR"
-echo -e "  3. auto-route: false             (Проверьте вручную, должно быть false!)${NC}"
+echo -e "  3. stack: mixed (Оптимизация скорости TCP)"
+echo -e "  4. auto-route: false (Проверьте вручную, должно быть false!)${NC}"
