@@ -1,7 +1,7 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.7.4)
-# Фикс: удалена жесткая зависимость Requires, безопасный запуск.
+# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.7.5)
+# Оптимизация: MSS 1280, безопасный BBR, фиксация стека gvisor.
 # =========================================================
 
 set -e
@@ -66,11 +66,15 @@ echo -e " - Интерфейс:   $HOST_IF"
 echo -e " - Прокси TUN:  $PROXY_IF"
 
 # 2. Настройка ядра
-echo -e "${YELLOW}[*] Настройка sysctl...${NC}"
+echo -e "${YELLOW}[*] Настройка sysctl (Форвардинг + BBR)...${NC}"
 cat << 'EOF' > /etc/sysctl.d/99-amnezia-mihomo.conf
 net.ipv4.ip_forward = 1
 net.ipv4.conf.all.rp_filter = 0
 net.ipv4.conf.default.rp_filter = 0
+
+# Безопасное включение TCP BBR (без изменения лимитов памяти)
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
 EOF
 sysctl -p /etc/sysctl.d/99-amnezia-mihomo.conf > /dev/null
 for i in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "$i"; done
@@ -94,7 +98,7 @@ EOF
 chattr +i /etc/resolv.conf
 
 # Docker использует шлюз docker0, чтобы получать фейковые IP от Mihomo напрямую
-DOCKER_GW=$(ip -4 addr show docker0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+DOCKER_GW=$(ip -4 addr show docker0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
 if [ -n "$DOCKER_GW" ]; then
     echo -e "${YELLOW}[*] Настройка Docker DNS (daemon.json -> $DOCKER_GW)...${NC}"
     if [ ! -f /etc/docker/daemon.json ]; then
@@ -119,10 +123,17 @@ if [ -n "$MIHOMO_CONFIG" ]; then
     sed -i -E "s|fake-ip-range:.*|fake-ip-range: $FAKE_IP_RANGE|g" "$MIHOMO_CONFIG"
     sed -i -E "s|inet4-address:.*|inet4-address: $TUN_INET_ADDR|g" "$MIHOMO_CONFIG"
     
+    # Жестко фиксируем stack: gvisor
+    if grep -q "^\s*stack:" "$MIHOMO_CONFIG"; then
+        sed -i -E "s|^([[:space:]]*)stack:.*|\1stack: gvisor|g" "$MIHOMO_CONFIG"
+    else
+        awk '/^tun:/{f=1} f&&/^[^#[:space:]]/{if(!done){print "  stack: gvisor"; done=1}} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
+    fi
+
     # Безопасно меняем auto-route на false только в секции tun:
     awk '/^tun:/{f=1} f&&/auto-route:/{sub(/auto-route:.*/, "auto-route: false"); f=0} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
     
-    echo -e "${GREEN}    Диапазоны и auto-route: false успешно применены.${NC}"
+    echo -e "${GREEN}    Диапазоны, stack: gvisor и auto-route: false успешно применены.${NC}"
 else
     echo -e "${YELLOW}    Конфиг config.yaml не найден автоматически. Проверьте настройки вручную!${NC}"
 fi
@@ -301,10 +312,11 @@ systemctl enable --now warp-docker-routing.service
 systemctl enable --now check-warp-routing.timer
 
 echo -e "${GREEN}========================================================${NC}"
-echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.7.4)${NC}"
+echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.7.5)${NC}"
 echo -e "${GREEN}========================================================${NC}"
 echo -e "${YELLOW}Скрипт автоматически пропатчил config.yaml Mihomo:${NC}"
 echo -e "  1. fake-ip-range: $FAKE_IP_RANGE"
 echo -e "  2. inet4-address: $TUN_INET_ADDR"
-echo -e "  3. auto-route: false (Защита от потери SSH)"
-echo -e "  4. Оптимизация скорости: TCPMSS --set-mss 1280${NC}"
+echo -e "  3. stack: gvisor (Защита от падений ядра)"
+echo -e "  4. auto-route: false (Защита от потери SSH)"
+echo -e "  5. Оптимизация скорости: TCPMSS --set-mss 1280 + BBR${NC}"
