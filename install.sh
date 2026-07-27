@@ -1,8 +1,8 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.1)
+# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.2)
 # Включает: фикс коллизии Fake-IP, разделение DNS (Host vs Docker),
-# именованную таблицу маршрутизации и логирование.
+# именованную таблицу маршрутизации, логирование и кросс-дистрибутивность (Ubuntu/Debian).
 # =========================================================
 
 set -e
@@ -74,23 +74,39 @@ EOF
 sysctl -p /etc/sysctl.d/99-amnezia-mihomo.conf > /dev/null
 for i in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "$i"; done
 
-# 2.5 Именованная таблица маршрутизации (по совету ChatGPT)
+# 2.5 Именованная таблица маршрутизации
 if ! grep -q "^$TABLE_ID $TABLE_NAME$" /etc/iproute2/rt_tables; then
     echo "$TABLE_ID $TABLE_NAME" >> /etc/iproute2/rt_tables
 fi
 
 # 2.6 КРИТИЧЕСКИЙ ФИКС: Разделение DNS (Хост напрямую, Docker через Mihomo)
 echo -e "${YELLOW}[*] Настройка DNS (избежание коллизий Fake-IP)...${NC}"
-# Хост работает только на прямых DNS, чтобы получать реальные IP
-cat << 'EOF' > /etc/systemd/resolved.conf
+
+# Проверяем, используется ли systemd-resolved (как в Ubuntu)
+if command -v resolvectl >/dev/null 2>&1 && systemctl is-active systemd-resolved >/dev/null 2>&1; then
+    echo -e "${YELLOW}    Обнаружен systemd-resolved. Настройка через resolved.conf...${NC}"
+    cat << 'EOF' > /etc/systemd/resolved.conf
 [Resolve]
 DNS=1.1.1.1 8.8.8.8
 FallbackDNS=9.9.9.9
 Domains=
 EOF
-systemctl restart systemd-resolved
-resolvectl domain tun-mihomo "" 2>/dev/null || true
-resolvectl flush-caches
+    systemctl restart systemd-resolved
+    resolvectl domain tun-mihomo "" 2>/dev/null || true
+    resolvectl flush-caches 2>/dev/null || true
+else
+    echo -e "${YELLOW}    systemd-resolved не найден или не активен (Debian). Прямая запись в /etc/resolv.conf...${NC}"
+    # Если /etc/resolv.conf является симлинком (например, на stub-resolv.conf), удаляем его
+    if [ -L /etc/resolv.conf ]; then
+        rm -f /etc/resolv.conf
+    fi
+    # Прописываем прямые DNS сервера
+    cat << 'EOF' > /etc/resolv.conf
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+options timeout:2 attempts:3
+EOF
+fi
 
 # Docker использует шлюз docker0, чтобы получать фейковые IP от Mihomo
 DOCKER_GW=$(ip -4 addr show docker0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
