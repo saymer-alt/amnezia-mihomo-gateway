@@ -1,7 +1,7 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.7.3)
-# Фикс: ожидание интерфейса Mihomo при загрузке системы.
+# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.7.4)
+# Фикс: удалена жесткая зависимость Requires, безопасный запуск.
 # =========================================================
 
 set -e
@@ -213,12 +213,11 @@ chmod +x /usr/local/sbin/warp-docker-routing.sh
 
 # 4. Systemd
 echo -e "${YELLOW}[*] Создание systemd сервиса...${NC}"
-cat << EOF > /etc/systemd/system/warp-docker-routing.service
+cat << 'EOF' > /etc/systemd/system/warp-docker-routing.service
 [Unit]
 Description=Route Amnezia Docker traffic through Mihomo TUN
-After=network-online.target docker.service mihomo.service
+After=network-online.target docker.service
 Wants=network-online.target docker.service
-Requires=mihomo.service
 
 [Service]
 Type=oneshot
@@ -269,3 +268,43 @@ Description=Check WARP Docker routing
 
 [Service]
 Type=oneshot
+ExecStart=/usr/local/sbin/check-warp-routing.sh
+EOF
+
+cat << 'EOF' > /etc/systemd/system/check-warp-routing.timer
+[Unit]
+Description=Periodic WARP routing check
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# 6. Перезапуск Mihomo (чтобы применился новый config.yaml)
+if systemctl list-unit-files | grep -q "^mihomo.service"; then
+    systemctl restart mihomo.service
+elif command -v docker >/dev/null 2>&1; then
+    MIHOMO_C=$(docker ps -a --format '{{.Names}}' | grep "mihomo" | head -n1)
+    if [ -n "$MIHOMO_C" ]; then
+        docker restart "$MIHOMO_C"
+    fi
+fi
+sleep 3
+
+# 7. Запуск маршрутизации
+echo -e "${YELLOW}[*] Перезагрузка systemd и запуск...${NC}"
+systemctl daemon-reload
+systemctl enable --now warp-docker-routing.service
+systemctl enable --now check-warp-routing.timer
+
+echo -e "${GREEN}========================================================${NC}"
+echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.7.4)${NC}"
+echo -e "${GREEN}========================================================${NC}"
+echo -e "${YELLOW}Скрипт автоматически пропатчил config.yaml Mihomo:${NC}"
+echo -e "  1. fake-ip-range: $FAKE_IP_RANGE"
+echo -e "  2. inet4-address: $TUN_INET_ADDR"
+echo -e "  3. auto-route: false (Защита от потери SSH)"
+echo -e "  4. Оптимизация скорости: TCPMSS --set-mss 1280${NC}"
