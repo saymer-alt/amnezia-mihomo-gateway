@@ -1,0 +1,6 @@
+[Unit]
+Description=Check WARP Docker routing
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/check-warp-routing.sh
