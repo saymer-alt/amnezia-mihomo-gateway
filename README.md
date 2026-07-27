@@ -135,7 +135,8 @@ dns:
   enable: true
   ipv6: false
   enhanced-mode: fake-ip
-  fake-ip-range: 198.19.0.1/16 # Сдвинули диапазон, чтобы 198.18.0.1/30 ушел под TUN без пересечений
+  # Возвращаем безопасный диапазон
+  fake-ip-range: 240.0.0.1/4
   listen: 0.0.0.0:53
   nameserver:
     - 1.1.1.1
