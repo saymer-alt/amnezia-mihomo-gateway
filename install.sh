@@ -1,7 +1,7 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.7.4)
-# Фикс: удалена жесткая зависимость Requires, безопасный запуск.
+# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.9)
+# Оптимизация: Включение BBR, увеличение буферов, MSS 1380, стек gvisor.
 # =========================================================
 
 set -e
@@ -65,12 +65,24 @@ echo -e " - Порт AWG:    $WG_PORT"
 echo -e " - Интерфейс:   $HOST_IF"
 echo -e " - Прокси TUN:  $PROXY_IF"
 
-# 2. Настройка ядра
-echo -e "${YELLOW}[*] Настройка sysctl...${NC}"
+# 2. Настройка ядра (BBR + буферы + rp_filter)
+echo -e "${YELLOW}[*] Настройка sysctl (BBR, буферы, форвардинг)...${NC}"
 cat << 'EOF' > /etc/sysctl.d/99-amnezia-mihomo.conf
 net.ipv4.ip_forward = 1
 net.ipv4.conf.all.rp_filter = 0
 net.ipv4.conf.default.rp_filter = 0
+
+# TCP BBR
+net.ipv4.tcp_congestion_control = bbr
+net.core.default_qdisc = fq
+
+# Увеличение сетевых буферов
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.ipv4.tcp_rmem = 4096 87380 134217728
+net.ipv4.tcp_wmem = 4096 65536 134217728
+net.core.netdev_max_backlog = 65536
+net.ipv4.tcp_notsent_lowat = 16384
 EOF
 sysctl -p /etc/sysctl.d/99-amnezia-mihomo.conf > /dev/null
 for i in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "$i"; done
@@ -94,7 +106,7 @@ EOF
 chattr +i /etc/resolv.conf
 
 # Docker использует шлюз docker0, чтобы получать фейковые IP от Mihomo напрямую
-DOCKER_GW=$(ip -4 addr show docker0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+DOCKER_GW=$(ip -4 addr show docker0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
 if [ -n "$DOCKER_GW" ]; then
     echo -e "${YELLOW}[*] Настройка Docker DNS (daemon.json -> $DOCKER_GW)...${NC}"
     if [ ! -f /etc/docker/daemon.json ]; then
@@ -111,18 +123,26 @@ fi
 
 # 2.7 Авто-патч config.yaml Mihomo
 echo -e "${YELLOW}[*] Поиск и патч config.yaml Mihomo...${NC}"
-MIHOMO_CONFIG=$(find /etc/mihomo /opt/mihomo -name "config.yaml" 2>/dev/null | head -n1)
+MIHOMO_CONFIG=$(find /etc/mihomo /opt/mihomo /root /home -name "config.yaml" 2>/dev/null | head -n1)
 if [ -n "$MIHOMO_CONFIG" ]; then
     echo -e "${GREEN}    Найден конфиг: $MIHOMO_CONFIG${NC}"
-    
+
     # Меняем fake-ip-range и inet4-address
     sed -i -E "s|fake-ip-range:.*|fake-ip-range: $FAKE_IP_RANGE|g" "$MIHOMO_CONFIG"
     sed -i -E "s|inet4-address:.*|inet4-address: $TUN_INET_ADDR|g" "$MIHOMO_CONFIG"
-    
+
+    # Жестко фиксируем stack: gvisor (единственный стабильный вариант)
+    if grep -q "^\s*stack:" "$MIHOMO_CONFIG"; then
+        sed -i -E "s|^([[:space:]]*)stack:.*|\1stack: gvisor|g" "$MIHOMO_CONFIG"
+    else
+        # Если строки stack нет, вставляем после "tun:"
+        awk '/^tun:/{f=1} f&&/^[^#[:space:]]/{if(!done){print "  stack: gvisor"; done=1}} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
+    fi
+
     # Безопасно меняем auto-route на false только в секции tun:
     awk '/^tun:/{f=1} f&&/auto-route:/{sub(/auto-route:.*/, "auto-route: false"); f=0} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
-    
-    echo -e "${GREEN}    Диапазоны и auto-route: false успешно применены.${NC}"
+
+    echo -e "${GREEN}    Патчи применены: fake-ip-range, inet4-address, stack: gvisor, auto-route: false.${NC}"
 else
     echo -e "${YELLOW}    Конфиг config.yaml не найден автоматически. Проверьте настройки вручную!${NC}"
 fi
@@ -147,7 +167,7 @@ if [ "\${1:-}" = "cleanup" ]; then
     ip route del default table "\$TABLE_ID" 2>/dev/null || true
     ip route del "\$FAKE_IP_RANGE" dev "\$PROXY_IF" 2>/dev/null || true
     iptables -t mangle -D PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || true
-    iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 2>/dev/null || true
+    iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1380 2>/dev/null || true
     iptables -t nat -D POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || true
     iptables -D FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
@@ -177,6 +197,7 @@ if ! ip link show "\$PROXY_IF" >/dev/null 2>&1; then
     exit 1
 fi
 
+# Очистка старых правил перед применением новых
 ip rule del fwmark 0x88 lookup main priority 40 2>/dev/null || true
 ip rule del from "\$DOCKER_NETS" lookup "\$TABLE_ID" priority 100 2>/dev/null || true
 iptables -t mangle -D PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || true
@@ -184,34 +205,39 @@ iptables -t nat -D POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || true
 iptables -D FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
 iptables -D FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
 
+# Маршруты (в отдельную таблицу, не трогаем main — SSH в безопасности)
 ip route replace default dev "\$PROXY_IF" table "\$TABLE_ID"
 ip route replace "\$FAKE_IP_RANGE" dev "\$PROXY_IF"
 logger "warp-routing: Маршруты обновлены."
 
+# Правила маршрутизации
 ip rule add from "\$DOCKER_NETS" lookup "\$TABLE_ID" priority 100 2>/dev/null || true
 ip rule add fwmark 0x88 lookup main priority 40 2>/dev/null || true
 
-iptables -t mangle -C PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || \
+# Помечаем ответный трафик от WG, чтобы шел в main (loopback avoidance)
+iptables -t mangle -C PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || \\
 iptables -t mangle -I PREROUTING 1 -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88
 
-# Жесткая фиксация MSS для предотвращения фрагментации в туннелях (ускоряет скорость)
-iptables -t mangle -C FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 2>/dev/null || \
-iptables -t mangle -A FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280
+# MSS 1380 — оптимально для AWG -> Mihomo (быстрее чем 1280, стабильнее чем 1420)
+iptables -t mangle -C FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1380 2>/dev/null || \\
+iptables -t mangle -A FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1380
 
-iptables -t nat -C POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || \
+# NAT для выхода через TUN
+iptables -t nat -C POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || \\
 iptables -t nat -A POSTROUTING -o "\$PROXY_IF" -j MASQUERADE
 
-iptables -C FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || \
+# Разрешаем форвардинг
+iptables -C FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || \\
 iptables -I FORWARD 1 -s "\$DOCKER_NETS" -j ACCEPT
 
-iptables -C FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || \
+iptables -C FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || \\
 iptables -I FORWARD 2 -d "\$DOCKER_NETS" -j ACCEPT
 
 logger "warp-routing: Правила успешно применены."
 EOF
 chmod +x /usr/local/sbin/warp-docker-routing.sh
 
-# 4. Systemd
+# 4. Systemd сервис (БЕЗ Requires=mihomo.service — работает и с Docker, и с systemd)
 echo -e "${YELLOW}[*] Создание systemd сервиса...${NC}"
 cat << 'EOF' > /etc/systemd/system/warp-docker-routing.service
 [Unit]
@@ -284,6 +310,7 @@ WantedBy=timers.target
 EOF
 
 # 6. Перезапуск Mihomo (чтобы применился новый config.yaml)
+echo -e "${YELLOW}[*] Перезапуск Mihomo для применения конфига...${NC}"
 if systemctl list-unit-files | grep -q "^mihomo.service"; then
     systemctl restart mihomo.service
 elif command -v docker >/dev/null 2>&1; then
@@ -301,10 +328,12 @@ systemctl enable --now warp-docker-routing.service
 systemctl enable --now check-warp-routing.timer
 
 echo -e "${GREEN}========================================================${NC}"
-echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.7.4)${NC}"
+echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.9)${NC}"
 echo -e "${GREEN}========================================================${NC}"
 echo -e "${YELLOW}Скрипт автоматически пропатчил config.yaml Mihomo:${NC}"
 echo -e "  1. fake-ip-range: $FAKE_IP_RANGE"
 echo -e "  2. inet4-address: $TUN_INET_ADDR"
-echo -e "  3. auto-route: false (Защита от потери SSH)"
-echo -e "  4. Оптимизация скорости: TCPMSS --set-mss 1280${NC}"
+echo -e "  3. stack: gvisor (Максимальная стабильность)"
+echo -e "  4. auto-route: false (Защита от потери SSH)"
+echo -e "  5. TCP BBR + увеличенные буферы (оптимизация скорости)"
+echo -e "  6. TCPMSS --set-mss 1380 (оптимально для AWG->Mihomo)"
