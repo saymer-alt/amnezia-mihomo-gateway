@@ -1,0 +1,14 @@
+[Unit]
+Description=Route Amnezia Docker traffic through Mihomo TUN
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/warp-docker-routing.sh
+ExecStop=/usr/local/sbin/warp-docker-routing.sh cleanup
+RemainAfterExit=yes
+ExecReload=/usr/local/sbin/warp-docker-routing.sh
+
+[Install]
+WantedBy=multi-user.target
