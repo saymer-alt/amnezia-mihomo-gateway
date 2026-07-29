@@ -158,7 +158,7 @@ if [ "\${1:-}" = "cleanup" ]; then
     ip route del default table "\$TABLE_ID" 2>/dev/null || true
     ip route del "\$FAKE_IP_RANGE" dev "\$PROXY_IF" 2>/dev/null || true
     iptables -t mangle -D PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || true
-    iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 2>/dev/null || true
+    iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
     iptables -t nat -D POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || true
     iptables -D FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
@@ -206,8 +206,8 @@ iptables -t mangle -C PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -
 iptables -t mangle -I PREROUTING 1 -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88
 
 # Жесткая фиксация MSS для предотвращения фрагментации в туннелях (ускоряет скорость)
-iptables -t mangle -C FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 2>/dev/null || \
-iptables -t mangle -A FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280
+iptables -t mangle -C FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+iptables -t mangle -A FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 
 iptables -t nat -C POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || \
 iptables -t nat -A POSTROUTING -o "\$PROXY_IF" -j MASQUERADE
@@ -319,4 +319,4 @@ echo -e "  1. fake-ip-range: $FAKE_IP_RANGE"
 echo -e "  2. inet4-address: $TUN_INET_ADDR"
 echo -e "  3. stack: gvisor (Защита от падений ядра)"
 echo -e "  4. auto-route: false (Защита от потери SSH)"
-echo -e "  5. Оптимизация скорости: TCPMSS --set-mss 1280 + BBR${NC}"
+echo -e "  5. Оптимизация скорости: TCPMSS --clamp-mss-to-pmtu + BBR${NC}"
