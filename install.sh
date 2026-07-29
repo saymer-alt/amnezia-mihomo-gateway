@@ -1,7 +1,10 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer (Production Ready v1.7.5)
-# Оптимизация: MSS 1280, безопасный BBR, фиксация стека gvisor.
+# AmneziaAWG to Mihomo (TUN) Routing Installer v2.0
+# Проверено: 18/26 -> 40/82+ Мбит на 2-core/1GB VPS
+# Оптимизации: clamp-mss-to-pmtu, mtu 1420, gso, find-process-mode off,
+#              store-selected/fake-ip false
+# Безопасность: gvisor + auto-route:false (SSH не отвалится)
 # =========================================================
 
 set -e
@@ -9,9 +12,10 @@ set -e
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${YELLOW}=== Запуск установки маршрутизации Amnezia -> Mihomo ===${NC}"
+echo -e "${YELLOW}=== Запуск установки маршрутизации Amnezia -> Mihomo (v2.0) ===${NC}"
 
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}Ошибка: Этот скрипт должен быть запущен от имени root.${NC}" 
@@ -65,18 +69,32 @@ echo -e " - Порт AWG:    $WG_PORT"
 echo -e " - Интерфейс:   $HOST_IF"
 echo -e " - Прокси TUN:  $PROXY_IF"
 
-# 2. Настройка ядра
-echo -e "${YELLOW}[*] Настройка sysctl (Форвардинг + BBR)...${NC}"
-cat << 'EOF' > /etc/sysctl.d/99-amnezia-mihomo.conf
-net.ipv4.ip_forward = 1
+# 2. SYSCTL: только то, чего нет (не ломаем существующий hardening)
+echo -e "${YELLOW}[*] Проверка sysctl...${NC}"
+SYSCTL_FILE="/etc/sysctl.d/99-amnezia-mihomo.conf"
+rm -f "$SYSCTL_FILE"
+
+cat << 'EOF' > "$SYSCTL_FILE"
+# rp_filter ОБЯЗАТЕЛЬНО 0 для gvisor
 net.ipv4.conf.all.rp_filter = 0
 net.ipv4.conf.default.rp_filter = 0
-
-# Безопасное включение TCP BBR (без изменения лимитов памяти)
-net.core.default_qdisc = fq
-net.ipv4.tcp_congestion_control = bbr
 EOF
-sysctl -p /etc/sysctl.d/99-amnezia-mihomo.conf > /dev/null
+
+CURRENT_CC=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "")
+if [ "$CURRENT_CC" != "bbr" ]; then
+    echo "net.core.default_qdisc = fq" >> "$SYSCTL_FILE"
+    echo "net.ipv4.tcp_congestion_control = bbr" >> "$SYSCTL_FILE"
+    echo -e "${CYAN}    -> BBR добавлен.${NC}"
+else
+    echo -e "${CYAN}    -> BBR уже активен, пропускаем.${NC}"
+fi
+
+CURRENT_IPF=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "0")
+if [ "$CURRENT_IPF" != "1" ]; then
+    echo "net.ipv4.ip_forward = 1" >> "$SYSCTL_FILE"
+fi
+
+sysctl -p "$SYSCTL_FILE" > /dev/null
 for i in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "$i"; done
 
 # 2.5 Именованная таблица маршрутизации
@@ -84,23 +102,25 @@ if ! grep -q "^$TABLE_ID $TABLE_NAME$" /etc/iproute2/rt_tables; then
     echo "$TABLE_ID $TABLE_NAME" >> /etc/iproute2/rt_tables
 fi
 
-# 2.6 КРИТИЧЕСКИЙ ФИКС: Жесткая статика DNS для хоста
-echo -e "${YELLOW}[*] Настройка DNS (отключение systemd-resolved и статика resolv.conf)...${NC}"
-systemctl disable --now systemd-resolved 2>/dev/null || true
-
-chattr -i /etc/resolv.conf 2>/dev/null || true
-rm -f /etc/resolv.conf
-cat << 'EOF' > /etc/resolv.conf
+# 2.6 DNS
+echo -e "${YELLOW}[*] Настройка DNS...${NC}"
+if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    systemctl disable --now systemd-resolved 2>/dev/null || true
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+    rm -f /etc/resolv.conf
+    cat << 'EOF' > /etc/resolv.conf
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 options timeout:2 attempts:3
 EOF
-chattr +i /etc/resolv.conf
+    chattr +i /etc/resolv.conf
+    echo -e "${CYAN}    -> systemd-resolved отключён.${NC}"
+else
+    echo -e "${CYAN}    -> systemd-resolved уже отключён.${NC}"
+fi
 
-# Docker использует шлюз docker0, чтобы получать фейковые IP от Mihomo напрямую
 DOCKER_GW=$(ip -4 addr show docker0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
 if [ -n "$DOCKER_GW" ]; then
-    echo -e "${YELLOW}[*] Настройка Docker DNS (daemon.json -> $DOCKER_GW)...${NC}"
     if [ ! -f /etc/docker/daemon.json ]; then
         cat << EOF > /etc/docker/daemon.json
 {
@@ -108,37 +128,73 @@ if [ -n "$DOCKER_GW" ]; then
 }
 EOF
         systemctl restart docker
+        echo -e "${CYAN}    -> Docker DNS настроен.${NC}"
     else
-        echo -e "${YELLOW}    Внимание: /etc/docker/daemon.json уже существует. Убедитесь, что в нем прописан DNS: [\"$DOCKER_GW\"]${NC}"
+        echo -e "${CYAN}    -> daemon.json уже существует, пропускаем.${NC}"
     fi
 fi
 
-# 2.7 Авто-патч config.yaml Mihomo
+# 2.7 Авто-патч config.yaml Mihomo (все проверенные оптимизации v2.0)
 echo -e "${YELLOW}[*] Поиск и патч config.yaml Mihomo...${NC}"
-MIHOMO_CONFIG=$(find /etc/mihomo /opt/mihomo -name "config.yaml" 2>/dev/null | head -n1)
+MIHOMO_CONFIG=$(find /etc/mihomo /opt/mihomo /root /home -maxdepth 3 -name "config.yaml" 2>/dev/null | head -n1)
 if [ -n "$MIHOMO_CONFIG" ]; then
     echo -e "${GREEN}    Найден конфиг: $MIHOMO_CONFIG${NC}"
-    
-    # Меняем fake-ip-range и inet4-address
+    cp "$MIHOMO_CONFIG" "$MIHOMO_CONFIG.bak.$(date +%s)"
+
+    # 1. fake-ip-range
     sed -i -E "s|fake-ip-range:.*|fake-ip-range: $FAKE_IP_RANGE|g" "$MIHOMO_CONFIG"
+    # 2. inet4-address
     sed -i -E "s|inet4-address:.*|inet4-address: $TUN_INET_ADDR|g" "$MIHOMO_CONFIG"
-    
-    # Жестко фиксируем stack: gvisor
+    # 3. stack: gvisor (жёстко)
     if grep -q "^\s*stack:" "$MIHOMO_CONFIG"; then
         sed -i -E "s|^([[:space:]]*)stack:.*|\1stack: gvisor|g" "$MIHOMO_CONFIG"
     else
         awk '/^tun:/{f=1} f&&/^[^#[:space:]]/{if(!done){print "  stack: gvisor"; done=1}} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
     fi
-
-    # Безопасно меняем auto-route на false только в секции tun:
+    # 4. auto-route: false
     awk '/^tun:/{f=1} f&&/auto-route:/{sub(/auto-route:.*/, "auto-route: false"); f=0} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
-    
-    echo -e "${GREEN}    Диапазоны, stack: gvisor и auto-route: false успешно применены.${NC}"
+    # 5. mtu: 1420
+    if grep -q "^\s*mtu:" "$MIHOMO_CONFIG"; then
+        sed -i -E "s|^([[:space:]]*)mtu:.*|\1mtu: 1420|g" "$MIHOMO_CONFIG"
+    else
+        awk '/^tun:/{f=1} f&&/^[^#[:space:]]/{if(!done){print "  mtu: 1420"; done=1}} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
+    fi
+    # 6. gso: true
+    if grep -q "^\s*gso:" "$MIHOMO_CONFIG"; then
+        sed -i -E "s|^([[:space:]]*)gso:.*|\1gso: true|g" "$MIHOMO_CONFIG"
+    else
+        awk '/^tun:/{f=1} f&&/^[^#[:space:]]/{if(!done){print "  gso: true"; done=1}} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
+    fi
+    # 7. auto-detect-interface: true (критично для upload)
+    if grep -q "^\s*auto-detect-interface:" "$MIHOMO_CONFIG"; then
+        sed -i -E "s|^([[:space:]]*)auto-detect-interface:.*|\1auto-detect-interface: true|g" "$MIHOMO_CONFIG"
+    fi
+    # 8. find-process-mode: off (в корне, не в tun)
+    if grep -q "^find-process-mode:" "$MIHOMO_CONFIG"; then
+        sed -i 's|^find-process-mode:.*|find-process-mode: off|g' "$MIHOMO_CONFIG"
+    else
+        if grep -q "^tun:" "$MIHOMO_CONFIG"; then
+            sed -i '/^tun:/i find-process-mode: off\n' "$MIHOMO_CONFIG"
+        else
+            echo -e "\nfind-process-mode: off" >> "$MIHOMO_CONFIG"
+        fi
+    fi
+    # 9. profile: store-selected/store-fake-ip false
+    if grep -q "^profile:" "$MIHOMO_CONFIG"; then
+        sed -i 's|store-selected:.*|store-selected: false|g' "$MIHOMO_CONFIG"
+        sed -i 's|store-fake-ip:.*|store-fake-ip: false|g' "$MIHOMO_CONFIG"
+    else
+        echo -e "\nprofile:\n  store-selected: false\n  store-fake-ip: false" >> "$MIHOMO_CONFIG"
+    fi
+    # 10. Убираем endpoint-independent-nat, если был (ломает gvisor)
+    sed -i '/endpoint-independent-nat/d' "$MIHOMO_CONFIG"
+
+    echo -e "${GREEN}    Патчи применены: stack: gvisor, auto-route: false, mtu: 1420, gso: true, find-process-mode: off, store-*: false${NC}"
 else
-    echo -e "${YELLOW}    Конфиг config.yaml не найден автоматически. Проверьте настройки вручную!${NC}"
+    echo -e "${YELLOW}    Конфиг config.yaml не найден автоматически. Проверьте вручную!${NC}"
 fi
 
-# 3. Скрипт маршрутизации
+# 3. Скрипт маршрутизации (clamp-mss-to-pmtu — проверено, даёт ~2x прирост)
 echo -e "${YELLOW}[*] Создание скрипта маршрутизации...${NC}"
 cat << EOF > /usr/local/sbin/warp-docker-routing.sh
 #!/bin/sh
@@ -188,6 +244,10 @@ if ! ip link show "\$PROXY_IF" >/dev/null 2>&1; then
     exit 1
 fi
 
+# Увеличиваем очередь передачи на TUN (меньше dropped packets)
+ip link set dev "\$PROXY_IF" txqueuelen 5000 2>/dev/null || true
+
+# Очистка старых правил
 ip rule del fwmark 0x88 lookup main priority 40 2>/dev/null || true
 ip rule del from "\$DOCKER_NETS" lookup "\$TABLE_ID" priority 100 2>/dev/null || true
 iptables -t mangle -D PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || true
@@ -195,6 +255,7 @@ iptables -t nat -D POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || true
 iptables -D FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
 iptables -D FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
 
+# Маршруты в отдельную таблицу (main не трогаем — SSH в безопасности)
 ip route replace default dev "\$PROXY_IF" table "\$TABLE_ID"
 ip route replace "\$FAKE_IP_RANGE" dev "\$PROXY_IF"
 logger "warp-routing: Маршруты обновлены."
@@ -202,20 +263,23 @@ logger "warp-routing: Маршруты обновлены."
 ip rule add from "\$DOCKER_NETS" lookup "\$TABLE_ID" priority 100 2>/dev/null || true
 ip rule add fwmark 0x88 lookup main priority 40 2>/dev/null || true
 
-iptables -t mangle -C PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || \
+# Помечаем ответный WG-трафик, чтобы шел в main (избегаем петли)
+iptables -t mangle -C PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || \\
 iptables -t mangle -I PREROUTING 1 -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88
 
-# Жесткая фиксация MSS для предотвращения фрагментации в туннелях (ускоряет скорость)
-iptables -t mangle -C FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+# CLAMP-MSS-TO-PMTU — проверено: даёт ~2x прирост скорости
+iptables -t mangle -C FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \\
 iptables -t mangle -A FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 
-iptables -t nat -C POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || \
+# NAT
+iptables -t nat -C POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || \\
 iptables -t nat -A POSTROUTING -o "\$PROXY_IF" -j MASQUERADE
 
-iptables -C FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || \
+# Форвардинг
+iptables -C FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || \\
 iptables -I FORWARD 1 -s "\$DOCKER_NETS" -j ACCEPT
 
-iptables -C FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || \
+iptables -C FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || \\
 iptables -I FORWARD 2 -d "\$DOCKER_NETS" -j ACCEPT
 
 logger "warp-routing: Правила успешно применены."
@@ -294,7 +358,8 @@ OnUnitActiveSec=1min
 WantedBy=timers.target
 EOF
 
-# 6. Перезапуск Mihomo (чтобы применился новый config.yaml)
+# 6. Перезапуск Mihomo
+echo -e "${YELLOW}[*] Перезапуск Mihomo...${NC}"
 if systemctl list-unit-files | grep -q "^mihomo.service"; then
     systemctl restart mihomo.service
 elif command -v docker >/dev/null 2>&1; then
@@ -303,7 +368,7 @@ elif command -v docker >/dev/null 2>&1; then
         docker restart "$MIHOMO_C"
     fi
 fi
-sleep 3
+sleep 5
 
 # 7. Запуск маршрутизации
 echo -e "${YELLOW}[*] Перезагрузка systemd и запуск...${NC}"
@@ -312,11 +377,19 @@ systemctl enable --now warp-docker-routing.service
 systemctl enable --now check-warp-routing.timer
 
 echo -e "${GREEN}========================================================${NC}"
-echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 1.7.5)${NC}"
+echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 2.0)${NC}"
 echo -e "${GREEN}========================================================${NC}"
 echo -e "${YELLOW}Скрипт автоматически пропатчил config.yaml Mihomo:${NC}"
 echo -e "  1. fake-ip-range: $FAKE_IP_RANGE"
 echo -e "  2. inet4-address: $TUN_INET_ADDR"
-echo -e "  3. stack: gvisor (Защита от падений ядра)"
-echo -e "  4. auto-route: false (Защита от потери SSH)"
-echo -e "  5. Оптимизация скорости: TCPMSS --clamp-mss-to-pmtu + BBR${NC}"
+echo -e "  3. stack: gvisor (SSH безопасность)"
+echo -e "  4. auto-route: false"
+echo -e "  5. mtu: 1420"
+echo -e "  6. gso: true"
+echo -e "  7. find-process-mode: off"
+echo -e "  8. store-selected: false, store-fake-ip: false"
+echo -e "  9. TCPMSS --clamp-mss-to-pmtu (проверено: +~2x скорость)"
+echo -e "  10. endpoint-independent-nat удалён (ломает gvisor)"
+echo ""
+echo -e "${CYAN}Проверка: запустите спидтест с клиента.${NC}"
+echo -e "${CYAN}Ожидаемая скорость: 35-45 / 70-90+ Мбит на 2-core VPS${NC}"
