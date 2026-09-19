@@ -1,4 +1,4 @@
-# awg-warp-router
+# amnezia-mihomo-gateway
 
 Автоматическая маршрутизация трафика **AmneziaAWG** через **Mihomo TUN** с выходом в интернет через **Cloudflare WARP**.
 
@@ -52,6 +52,9 @@ chmod +x uninstall.sh
 sudo ./uninstall.sh
 ```
 
+> `uninstall.sh` удаляет routing rules, units и generated scripts, но не выполняет полный rollback
+> системных изменений (DNS/resolved, `rt_tables`, Docker DNS и patch Mihomo config). Подробности — в README.
+
 ---
 
 ## 📋 Что делает скрипт
@@ -61,7 +64,7 @@ sudo ./uninstall.sh
 3. **Routing Script** — генерирует `/usr/local/sbin/warp-docker-routing.sh` с уже подставленными переменными.
 4. **Systemd Services** — создаёт `warp-docker-routing.service` и привязывает его к запуску после `mihomo.service` и `docker.service`.
 5. **Watchdog** — создаёт скрипт проверки и systemd-timer, который раз в минуту проверяет: жив ли интерфейс `tun-mihomo` и не слетели ли правила маршрутизации. Если что-то упало — сам восстанавливает.
-6. **Auto-restart** — прописывает `Restart=always` для сервиса Mihomo (если он установлен как системный сервис).
+6. **Watchdog recovery** — если `tun-mihomo` исчезает, watchdog пытается перезапустить Mihomo: через `mihomo.service`, если он есть, либо через подходящий Docker-контейнер. Installer не меняет restart policy самого Mihomo.
 
 ---
 
@@ -111,7 +114,7 @@ ip route show table 100
 
 - Debian 12 / Ubuntu 22.04+
 - Docker с запущенным контейнером `amnezia-awg`
-- Mihomo (Clash Meta) установлен как systemd-сервис `mihomo.service` с включённым TUN-интерфейсом `tun-mihomo`
+- Mihomo (Clash Meta) запущен как systemd-сервис `mihomo.service` или Docker-контейнер с включённым TUN-интерфейсом `tun-mihomo`
 - Права root
 
 ---
