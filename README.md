@@ -59,7 +59,7 @@
 | Файл | Назначение |
 |---|---|
 | `install.sh` | Установщик. Автоопределяет сеть Docker, порт AWG, создаёт скрипты и systemd-юниты |
-| `uninstall.sh` | Полное удаление всех правил, сервисов и файлов |
+| `uninstall.sh` | Удаление routing rules, сервисов и generated files; **не полный rollback** системных изменений (см. раздел «Удаление») |
 | `warp-docker-routing.sh` | Скрипт маршрутизации (создаётся автоматически в `/usr/local/sbin/`) |
 | `check-warp-routing.sh` | Watchdog: проверяет наличие tun-интерфейса и правил раз в минуту |
 | `warp-docker-routing.service` | Systemd unit для маршрутизации |
@@ -72,7 +72,7 @@
 - **OS:** Debian 12 / Ubuntu 22.04+ (другие systemd-based дистрибутивы — вероятно, тоже)
 - **Docker:** Установлен и запущен
 - **AmneziaAWG:** Контейнер `amnezia-awg` запущен и работает
-- **Mihomo (Clash Meta):** Установлен как systemd-сервис `mihomo.service`, в конфиге включён TUN-интерфейс с именем `tun-mihomo`
+- **Mihomo (Clash Meta):** Запущен как `mihomo.service` или Docker-контейнер; в конфиге включён TUN-интерфейс `tun-mihomo`
 - **Root:** Скрипт запускается от root
 
 ---
@@ -129,7 +129,7 @@ tun:
   device: tun-mihomo
   auto-route: false          # <-- СТРОГО false! Иначе отвалится SSH и скрипт конфликтует
   auto-detect-interface: true
-  inet4-address: 198.18.0.1/30 # <-- Обязательно! Без IPv4 адреса NAT не будет работать
+  inet4-address: 10.255.255.1/30 # <-- Текущее значение installer v2.0; без IPv4 адреса NAT не будет работать
 
 # --- DNS СЕКЦИЯ (рекомендуется) ---
 dns:
@@ -137,7 +137,7 @@ dns:
   ipv6: false
   enhanced-mode: fake-ip
   # Возвращаем безопасный диапазон
-  fake-ip-range: 240.0.0.1/4
+  fake-ip-range: 198.18.0.0/16
   listen: 0.0.0.0:53
   nameserver:
     - 1.1.1.1
@@ -148,7 +148,7 @@ dns:
 
 **Важно:** 
 - `auto-route: false` критически важен. Наш скрипт маршрутизации сам создаёт отдельную **таблицу 100** и направляет туда только трафик Докера. Если Mihomo включит `auto-route`, он перехватит весь трафик сервера.
-- `inet4-address: 198.18.0.1/30` обязателен для создания IPv4-адреса на интерфейсе, чтобы `iptables` могла корректно делать MASQUERADE.
+- `inet4-address` обязателен для создания IPv4-адреса на интерфейсе, чтобы `iptables` могла корректно делать MASQUERADE. Текущий installer v2.0 использует `10.255.255.1/30` и приводит `fake-ip-range` к `198.18.0.0/16`.
 
 Если используешь WARP через прокси-группу в Mihomo:
 
@@ -234,10 +234,22 @@ sudo ./uninstall.sh
 ```
 
 Это:
-- Остановит и отключит сервисы
-- Вызовет `cleanup` (удалит все `iptables`, `ip rule`, `ip route`)
-- Удалит все созданные файлы
-- Вернёт `sysctl` к состоянию по умолчанию (файл `99-amnezia-mihomo.conf` удаляется)
+- остановит и отключит routing/watchdog-сервисы;
+- вызовет `cleanup` и удалит созданные проектом `iptables`, `ip rule` и routing-table routes;
+- удалит generated scripts, systemd units и `/etc/sysctl.d/99-amnezia-mihomo.conf`.
+
+**Важно: это не полный rollback сервера к состоянию до установки.** Текущий `uninstall.sh`
+не восстанавливает автоматически:
+
+- live-значения sysctl, уже применённые installer'ом;
+- `systemd-resolved`, если installer его отключил;
+- прежний `/etc/resolv.conf` и его immutable attribute;
+- запись `100 mihomo` в `/etc/iproute2/rt_tables`;
+- `/etc/docker/daemon.json`, если installer создал его;
+- автоматически пропатченный `config.yaml` Mihomo.
+
+Перед patch `config.yaml` installer создаёт backup `.bak.<timestamp>`, но выбор и
+восстановление нужного backup остаются ручной операцией.
 
 ---
 
