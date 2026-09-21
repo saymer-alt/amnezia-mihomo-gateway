@@ -92,6 +92,7 @@ and existing sysctl/DNS values are not duplicated.
 - **`TCPMSS --clamp-mss-to-pmtu` + `mtu: 1420`**: double encapsulation AWG+WARP; according to
   the owner's measurements, clamp gives roughly 2x speed. Do not change without new measurements.
 - **`inet4-address` on the TUN is mandatory**: MASQUERADE does not work without an IPv4 address on the interface.
+- **Server TUN baseline remains `gvisor` (2026-09-21)**: the owner tested Mihomo `mips` on three VPS hosts and ran three direct `gvisor → mips` comparison tests on the EE server; `mips` performed worse in those tests. Do not switch the installer/server baseline to `mips` merely because it is newer or performs well on routers. Re-evaluate only with new VPS measurements after later Mihomo/mipstack updates.
 - **IPv4-only**: IPv6 is not routed; with `::/0` in AWG, an IPv6 leak is possible.
 
 ## Dangerous areas (can cut off SSH or break the server)
