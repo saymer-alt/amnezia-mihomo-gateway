@@ -3,7 +3,7 @@
 Persistent instructions for AI agents (primarily ZCode) working with this repository.
 This file complements `README.md` and `install.md` rather than duplicating them: README is user documentation
 (architecture, Mihomo TUN configuration, verification, troubleshooting), while this file contains working rules and traps for
-the agent. The project and documentation language is Russian. Owner: `saymer-alt`, branch: `main`.
+the agent. The project and documentation language is Russian. Owner: `saymer-alt`. Branches: `main` is integration; `stable` is production.
 
 ## Purpose
 
@@ -26,8 +26,9 @@ run ONLY on the target VPS, never on the development host.
 | `systemd/` | Reference copies of the three units; they match the heredocs in install.sh |
 | `LICENSE` | MIT |
 
-There is no CI, test suite, build system, `.github`, or dependency manager — and none is needed: this project consists of two
-bash scripts. Verification = careful review + deployment to a test VPS + the README checklist.
+The repository has lightweight GitHub Actions CI. CI deliberately does not emulate a real VPS, Docker, iptables, or live WARP:
+those still require deployment to a test VPS. Automated checks cover shell syntax, ShellCheck errors, and regression tests for
+the generated watchdog logic (including named/numeric routing-table aliases and self-heal behavior).
 
 ## Stack and available checks
 
@@ -36,9 +37,9 @@ bash scripts. Verification = careful review + deployment to a test VPS + the REA
 - Locally (Git Bash on the development host), only syntax checks are available:
   `bash -n install.sh && bash -n uninstall.sh` and `sh -n scripts/*.sh`.
   `shellcheck` — if installed; the project is not fully cleaned up for it, so evaluate warnings on their merits.
-- After changes, explicitly list which checks were performed and which are impossible locally —
-  anything requiring a live VPS (running the installer, `ip rule`, iptables, client speed tests)
-  cannot be verified locally.
+- After changes, run the repository's lightweight checks locally when possible and rely on GitHub Actions for the same
+  non-VPS regression suite. Anything requiring a live VPS (running the full installer, real `ip rule`/iptables behavior,
+  Docker/WARP connectivity, client speed tests) still requires explicit live validation.
 
 ## What install.sh does on the target server (in order)
 
@@ -129,12 +130,15 @@ and existing sysctl/DNS values are not duplicated.
 5. Before significant changes, reread README.md (the "Mihomo configuration" and
    "Troubleshooting" sections), the relevant heredocs, and templates. Behavioral changes belong in
    install.sh — it is the source of truth.
-6. After changes: run `bash -n` on both root scripts and, if available, `shellcheck`; explicitly
-   report which checks were performed and which are possible only on a VPS.
+6. After changes: run `bash -n install.sh`, `bash -n uninstall.sh`, `sh -n scripts/*.sh`,
+   `bash tests/test-watchdog.sh`, and `shellcheck -S error` when available. CI runs the same lightweight
+   checks. Explicitly report which checks were performed and which are possible only on a VPS.
 7. For an ambiguous task, first investigate the repository and state the constraints you found,
    then ask the owner; do not make assumptions.
-8. A push to `main` makes the installer immediately available via curl (README/install.md point to
-   `raw.githubusercontent.com/.../main/install.sh`) — a commit to `main` = a release.
+8. Release flow: feature/fix branches -> PR into `main` -> green CI -> live VPS validation when behavior touches routing,
+   installer, systemd, Docker, or Mihomo -> PR `main` -> `stable`. README/install.md point to
+   `raw.githubusercontent.com/.../stable/install.sh`, so only `stable` is the public installer channel.
+   Do not push unvalidated behavioral changes directly to `stable`.
 
 ## Known inconsistencies (do not "fix" silently)
 
