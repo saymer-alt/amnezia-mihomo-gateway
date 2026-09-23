@@ -24,6 +24,7 @@ run ONLY on the target VPS, never on the development host.
 | `install.md` | Short RU installation guide; the heading "awg-warp-router" is the old project name |
 | `scripts/` | Reference templates of generated scripts with placeholders `<DOCKER_SUBNET>`, `<WG_PORT>`, `<HOST_INTERFACE>`; they are NOT executed and lag behind install.sh (see "Known inconsistencies") |
 | `systemd/` | Reference copies of the three units; they match the heredocs in install.sh |
+| `docs/LIVE_AUDIT_2026-09-23.md` | Live VPS audit ledger: proven findings, implemented fixes, unresolved hypotheses, and release validation gate |
 | `LICENSE` | MIT |
 
 The repository has lightweight GitHub Actions CI. CI deliberately does not emulate a real VPS, Docker, iptables, or live WARP:
@@ -141,7 +142,9 @@ automatically overwrite that administrator-modified config.
 8. Release flow: feature/fix branches -> PR into `main` -> green CI -> live VPS validation when behavior touches routing,
    installer, systemd, Docker, or Mihomo -> PR `main` -> `stable`. README/install.md point to
    `raw.githubusercontent.com/.../stable/install.sh`, so only `stable` is the public installer channel.
-   Do not push unvalidated behavioral changes directly to `stable`.
+   Do not push unvalidated behavioral changes directly to `stable`. The rollback changes recorded in
+   `docs/LIVE_AUDIT_2026-09-23.md` specifically require a disposable-VPS `install -> reboot -> uninstall`
+   validation before promotion.
 
 ## Known inconsistencies (do not "fix" silently)
 
@@ -164,6 +167,8 @@ automatically overwrite that administrator-modified config.
 - **Live Debian 12 finding, 2026-09-23:** legacy uninstall also left Mihomo installer patches behind.
   New installs therefore keep an exact pre-install config snapshot and patched checksum. Uninstall restores
   it only on checksum match; any administrator divergence disables automatic rollback and preserves the snapshot.
+- The authoritative status of these findings is tracked in `docs/LIVE_AUDIT_2026-09-23.md`. Do not upgrade
+  an item marked observed/not proven into a factual root-cause claim without new evidence.
 
 ## Technical debt
 
