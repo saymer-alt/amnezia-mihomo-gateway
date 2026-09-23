@@ -56,7 +56,8 @@ the generated watchdog logic (including named/numeric routing-table aliases and 
    left untouched. When installer creates it, ownership, checksum and docker0 gateway are recorded in
    `/var/lib/amnezia-mihomo-gateway` so uninstall can remove only the file it owns. Docker is restarted only in this branch.
 6. Auto-patches the Mihomo config: searches for `config.yaml` in `/etc/mihomo /opt/mihomo /root /home`
-   (maxdepth 3), creates backup `.bak.<epoch>`, then applies 10 sed/awk changes: `fake-ip-range: 198.18.0.0/16`,
+   (maxdepth 3), creates backup `.bak.<epoch>`, stores an exact first pre-install snapshot plus
+   patched checksum in `/var/lib/amnezia-mihomo-gateway`, then applies 10 sed/awk changes: `fake-ip-range: 198.18.0.0/16`,
    `inet4-address: 10.255.255.1/30`, `stack: gvisor`, `auto-route: false`, `mtu: 1420`,
    `gso: true`, `auto-detect-interface: true`, `find-process-mode: off`,
    `store-selected/store-fake-ip: false`, removal of `endpoint-independent-nat`. Every change
@@ -75,7 +76,9 @@ the generated watchdog logic (including named/numeric routing-table aliases and 
    and `enable --now` for the service and timer.
 
 Repeated execution of install.sh is idempotent: a new Mihomo config `.bak` is created, rules are recreated,
-and existing sysctl/DNS values are not duplicated.
+and existing sysctl/DNS values are not duplicated. If the current Mihomo config no longer matches the
+last installer-patched checksum before a repeated install, state is marked diverged; uninstall must not
+automatically overwrite that administrator-modified config.
 
 ## Core logic (change only with understanding and an owner decision)
 
@@ -150,13 +153,17 @@ and existing sysctl/DNS values are not duplicated.
   README has `inet4-address: 198.18.0.1/30` and `fake-ip-range: 240.0.0.1/4`, while the installer writes
   `10.255.255.1/30` and `198.18.0.0/16`.
 - `install.md` is headed with the old name "awg-warp-router".
-- Uninstall still does NOT restore live sysctl values, systemd-resolved/original `/etc/resolv.conf`,
-  or the pre-install Mihomo config automatically. These remain rollback debt.
+- Uninstall still does NOT restore live sysctl values or systemd-resolved/original `/etc/resolv.conf`.
+  These remain rollback debt. Mihomo config rollback is automatic only for new tracked installations
+  with a checksum match; legacy installs or diverged configs remain manual by design.
 - **Live Debian 12 finding, 2026-09-23:** a legacy installer-created
   `/etc/docker/daemon.json` containing only `{"dns": ["172.17.0.1"]}` survived gateway removal.
   Docker then forwarded container DNS to host Mihomo after TUN/policy routing were gone, causing
   DNS resolution timeouts inside `amnezia-awg`. Current uninstall fixes this with tracked ownership
   for new installs and exact-content legacy cleanup; custom/modified `daemon.json` must be preserved.
+- **Live Debian 12 finding, 2026-09-23:** legacy uninstall also left Mihomo installer patches behind.
+  New installs therefore keep an exact pre-install config snapshot and patched checksum. Uninstall restores
+  it only on checksum match; any administrator divergence disables automatic rollback and preserves the snapshot.
 
 ## Technical debt
 
