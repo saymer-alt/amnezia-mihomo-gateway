@@ -59,11 +59,12 @@
 | Файл | Назначение |
 |---|---|
 | `install.sh` | Установщик. Автоопределяет сеть Docker, порт AWG, создаёт скрипты и systemd-юниты |
-| `uninstall.sh` | Удаление routing rules, сервисов и generated files; **не полный rollback** системных изменений (см. раздел «Удаление») |
+| `uninstall.sh` | Безопасный rollback отслеживаемого состояния проекта; системные DNS/sysctl rollback пока неполный (см. «Удаление» и live audit) |
 | `warp-docker-routing.sh` | Скрипт маршрутизации (создаётся автоматически в `/usr/local/sbin/`) |
 | `check-warp-routing.sh` | Watchdog: проверяет наличие tun-интерфейса и правил раз в минуту |
 | `warp-docker-routing.service` | Systemd unit для маршрутизации |
 | `check-warp-routing.timer` | Systemd timer для watchdog |
+| `docs/LIVE_AUDIT_2026-09-23.md` | Статус live-аудита: что доказано, что исправлено, а что ещё требует отдельной проверки |
 
 ---
 
@@ -254,7 +255,7 @@ sudo ./uninstall.sh
 - остановит и отключит routing/watchdog-сервисы;
 - вызовет `cleanup` и удалит созданные проектом `iptables`, `ip rule` и routing-table routes;
 - удалит generated scripts, systemd units и `/etc/sysctl.d/99-amnezia-mihomo.conf`;
-- удалит запись `100 mihomo` из `/etc/iproute2/rt_tables`, если после cleanup таблица больше никем не используется;
+- удалит запись `100 mihomo` из `/etc/iproute2/rt_tables` **только если текущий installer сам её добавил** и после cleanup таблица больше никем не используется; legacy-запись без ownership marker автоматически не удаляется;
 - удалит `/etc/docker/daemon.json`, **только если этот файл создал installer и он не был изменён позже**;
 - для старых установок без state marker распознает только точный legacy-файл вида
   `{"dns": ["<docker0-gateway>"]}`, который создавали прежние версии installer'а, и после удаления перезапустит Docker.
@@ -286,6 +287,12 @@ sudo ./uninstall.sh
 перезаписывает и оставляет snapshot для ручного сравнения/rollback.
 
 Обычный timestamp-backup `config.yaml.bak.<timestamp>` также продолжает создаваться перед каждым patch.
+
+> **Статус перед следующим релизом:** новая rollback-логика проходит CI и regression-тесты,
+> но полный `install -> reboot -> uninstall` ещё не выполнялся на отдельном расходном VPS.
+> Поэтому эти изменения пока не должны продвигаться в `stable`.
+> Подробная матрица «подтверждено / исправлено / не доказано / требует проверки»:
+> [docs/LIVE_AUDIT_2026-09-23.md](docs/LIVE_AUDIT_2026-09-23.md).
 
 ---
 
