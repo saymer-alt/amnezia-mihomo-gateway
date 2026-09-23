@@ -75,6 +75,23 @@ been validated on a disposable VPS. Therefore those automatic rollback actions a
   tested endpoints/ports. Mihomo's own health data at the same time showed QUIC ~40 ms, H2 ~42 ms,
   with `Fastest_MASQUE` currently selecting H2.
 
+## Cross-project impact
+
+Today's findings are not isolated to this repository. They define a shared contract across three projects:
+
+- **`link-generators`** produces the Mihomo configuration for the VPS Gateway profile. Its
+  `docs/VPS-GATEWAY.md` values and assumptions must stay compatible with this project's real routing,
+  TUN, DNS and lifecycle behavior. Generator output alone is not proof that host integration is correct.
+- **`amnezia-mihomo-gateway`** owns the current host-side AWG -> Mihomo integration: policy routing,
+  Docker interaction, TUN expectations, systemd/watchdog and rollback state.
+- **`vps-gateway-bootstrap`** is the future orchestration layer. It should discover both the generated
+  Mihomo state and the host integration, model ownership explicitly, plan the smallest change, validate
+  end-to-end behavior, and roll back only state it can prove it owns.
+
+The 2026-09-23 SE2 incident is therefore reusable evidence for all three repositories: system-wide
+Docker DNS, routing-table registrations and Mihomo config edits must never be treated as disposable
+side effects. Their pre-install/ownership state must be discoverable or recorded before mutation.
+
 ## Release gate for automatic rollback
 
 Before PR #4 automatic rollback is promoted to production, use a disposable VPS and test:
