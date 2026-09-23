@@ -150,7 +150,11 @@ CASE="$TMP_DIR/legacy-rt-table"
 prepare_case "$CASE"
 rm -f "$CASE/state/rt_table_added"
 run_uninstall "$CASE"
-grep -Eq '^[[:space:]]*100[[:space:]]+mihomo[[:space:]]* "$CASE/etc/iproute2/rt_tables"
+grep -Eq '^[[:space:]]*100[[:space:]]+mihomo[[:space:]]*
+echo "PASS: untracked legacy rt_tables entry preserved"
+
+echo "All uninstall state regression tests passed."
+ "$CASE/etc/iproute2/rt_tables"
 echo "PASS: untracked legacy rt_tables entry preserved"
 
 echo "All uninstall state regression tests passed."
