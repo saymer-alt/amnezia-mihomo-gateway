@@ -47,3 +47,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tests/test-watchdog.sh
+
+      - name: Uninstall state regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/test-uninstall-state.sh
