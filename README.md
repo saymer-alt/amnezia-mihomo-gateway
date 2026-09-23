@@ -79,13 +79,15 @@
 
 ## Быстрая установка
 
+Для обычной установки используйте ветку `stable`. Ветка `main` — интеграционная: изменения сначала проходят CI и проверку, а затем отдельным PR продвигаются в `stable`.
+
 ```bash
 # 1. Убедись, что AmneziaAWG и Mihomo уже запущены
 docker ps | grep amnezia-awg
 systemctl status mihomo
 
 # 2. Скачай и запусти установщик
-curl -fsSL https://raw.githubusercontent.com/saymer-alt/amnezia-mihomo-gateway/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/saymer-alt/amnezia-mihomo-gateway/stable/install.sh -o install.sh
 chmod +x install.sh
 ./install.sh
 

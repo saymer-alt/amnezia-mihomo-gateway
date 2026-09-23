@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - stable
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    name: Shell checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n install.sh
+          bash -n uninstall.sh
+          for script in scripts/*.sh; do
+            sh -n "$script"
+          done
+          for test in tests/*.sh; do
+            bash -n "$test"
+          done
+
+      - name: ShellCheck errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+          shellcheck -S error install.sh uninstall.sh scripts/*.sh tests/*.sh
+
+      - name: Watchdog regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/test-watchdog.sh
