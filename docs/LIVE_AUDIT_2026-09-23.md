@@ -26,6 +26,21 @@ The production installer now records **state only** in `/var/lib/amnezia-mihomo-
 This tracking does **not** change routing, DNS behavior, Mihomo patch values, or current uninstall behavior.
 It exists so future rollback can prove ownership instead of guessing.
 
+### Rollout decision made on 2026-09-23
+
+The rollback work was intentionally split into two stages instead of waiting for a disposable VPS
+before saving any of today's progress:
+
+1. **Promoted to `stable` now:** tracking-only state capture in the installer plus this audit
+   documentation. New installations immediately start preserving ownership/snapshots needed for a
+   future safe rollback.
+2. **Kept out of `stable` for now:** the new automatic rollback logic from PR #4. It remains gated
+   on a disposable-VPS `install -> reboot -> uninstall` test.
+
+This compromise is deliberate. It avoids shipping unvalidated automatic host-state restoration while
+also avoiding another generation of "blind" installations that cannot later prove which system state
+the project itself created or modified.
+
 ## Implemented in PR #4 but not promoted to stable yet
 
 A new uninstall implementation can use the recorded state to:
@@ -51,8 +66,14 @@ been validated on a disposable VPS. Therefore those automatic rollback actions a
   TUN address `198.18.0.0/30`. Root cause is not proven.
 - Martian log messages were not eliminated entirely by removing TUN, so TUN is not established as
   their sole cause.
-- WARPSCOUT showed a strong H2/H3 difference on a fresh separate WARP account, but this does not
-  directly prove the current Mihomo MASQUE QUIC proxy is unhealthy because account/SNI/endpoints differ.
+- WARPSCOUT showed a strong H2/H3 difference on a fresh separate WARP account. With the default SNI,
+  MASQUE/QUIC had 1/14 working while MASQUE-H2 had 70/70. Repeating both scans with the same
+  `SNI=4pda.to` used by the current Mihomo proxies changed QUIC only to 2/14, while H2 remained 70/70.
+  Both transports still reported `SEEN AS SE` via `FRA`. This strengthens the observation that H2 is
+  much more robust on this SE2 path, but it still does **not** prove that the currently configured Mihomo
+  `WARP-MASQUE-QUIC` proxy is broken: WARPSCOUT used a separate fresh WARP account and different
+  tested endpoints/ports. Mihomo's own health data at the same time showed QUIC ~40 ms, H2 ~42 ms,
+  with `Fastest_MASQUE` currently selecting H2.
 
 ## Release gate for automatic rollback
 
