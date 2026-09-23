@@ -73,6 +73,7 @@ prepare_case() {
            "$case_dir/systemd" "$case_dir/sbin" "$case_dir/sysctl" "$case_dir/state"
   : > "$SYSTEMCTL_LOG"
   printf '255 local\n254 main\n253 default\n100 mihomo\n' > "$case_dir/etc/iproute2/rt_tables"
+  : > "$case_dir/state/rt_table_added"
 }
 
 # Legacy installs had no state markers. Exact installer-generated daemon.json
@@ -142,5 +143,14 @@ run_uninstall "$CASE"
 grep -Fq 'admin-change: keep-me' "$CASE/mihomo-config.yaml"
 test -e "$CASE/state/mihomo_config_original.yaml"
 echo "PASS: administrator-modified Mihomo config preserved"
+
+# A legacy/untracked rt_tables entry is not safe to delete automatically:
+# another administrator could have created the same named table.
+CASE="$TMP_DIR/legacy-rt-table"
+prepare_case "$CASE"
+rm -f "$CASE/state/rt_table_added"
+run_uninstall "$CASE"
+grep -Eq '^[[:space:]]*100[[:space:]]+mihomo[[:space:]]* "$CASE/etc/iproute2/rt_tables"
+echo "PASS: untracked legacy rt_tables entry preserved"
 
 echo "All uninstall state regression tests passed."
