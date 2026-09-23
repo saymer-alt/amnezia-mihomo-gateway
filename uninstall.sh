@@ -80,6 +80,64 @@ if [ -f "$RT_TABLES_FILE" ] &&
     fi
 fi
 
+# Восстанавливаем точный pre-install config Mihomo только когда можем доказать,
+# что текущий файл всё ещё равен версии, пропатченной installer'ом.
+MIHOMO_RESTORED=0
+if [ -f "$STATE_DIR/mihomo_config_original.yaml" ] &&
+   [ -f "$STATE_DIR/mihomo_config_path" ] &&
+   [ -f "$STATE_DIR/mihomo_patched_sha256" ]; then
+    MIHOMO_CONFIG_PATH=$(cat "$STATE_DIR/mihomo_config_path" 2>/dev/null || true)
+    EXPECTED_PATCHED_SHA=$(cat "$STATE_DIR/mihomo_patched_sha256" 2>/dev/null || true)
+
+    if [ -f "$STATE_DIR/mihomo_config_diverged" ]; then
+        echo -e "${YELLOW}Mihomo config менялся после установки; automatic rollback пропущен, чтобы не затереть изменения администратора.${NC}"
+        echo -e "${YELLOW}Оригинальный snapshot сохранён: $STATE_DIR/mihomo_config_original.yaml${NC}"
+    elif [ -n "$MIHOMO_CONFIG_PATH" ] && [ -f "$MIHOMO_CONFIG_PATH" ]; then
+        CURRENT_MIHOMO_SHA=$(sha256sum "$MIHOMO_CONFIG_PATH" 2>/dev/null | awk '{print $1}')
+        if [ -n "$EXPECTED_PATCHED_SHA" ] && [ "$CURRENT_MIHOMO_SHA" = "$EXPECTED_PATCHED_SHA" ]; then
+            RESTORE_GUARD="$MIHOMO_CONFIG_PATH.bak.before-uninstall.$(date +%s)"
+            cp "$MIHOMO_CONFIG_PATH" "$RESTORE_GUARD"
+            cp "$STATE_DIR/mihomo_config_original.yaml" "$MIHOMO_CONFIG_PATH"
+
+            MIHOMO_BIN=$(command -v mihomo 2>/dev/null || true)
+            if [ -z "$MIHOMO_BIN" ] && [ -x /usr/local/bin/mihomo ]; then
+                MIHOMO_BIN=/usr/local/bin/mihomo
+            fi
+
+            if [ -n "$MIHOMO_BIN" ] &&
+               ! "$MIHOMO_BIN" -t -d "$(dirname "$MIHOMO_CONFIG_PATH")" >/dev/null 2>&1; then
+                cp "$RESTORE_GUARD" "$MIHOMO_CONFIG_PATH"
+                echo -e "${RED}Восстановленный pre-install config не прошёл проверку Mihomo; текущий config возвращён.${NC}"
+                echo -e "${YELLOW}Snapshot оставлен для ручной проверки: $STATE_DIR/mihomo_config_original.yaml${NC}"
+            else
+                MIHOMO_RESTORED=1
+                echo -e "${GREEN}Mihomo config восстановлен в точное pre-install состояние.${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Mihomo config был изменён после установки; automatic rollback пропущен.${NC}"
+            echo -e "${YELLOW}Оригинальный snapshot сохранён: $STATE_DIR/mihomo_config_original.yaml${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Не найден исходный путь config.yaml; snapshot Mihomo оставлен для ручного восстановления.${NC}"
+    fi
+fi
+
+if [ "$MIHOMO_RESTORED" -eq 1 ]; then
+    if systemctl list-unit-files 2>/dev/null | grep -q "^mihomo.service"; then
+        systemctl restart mihomo.service || echo -e "${RED}Предупреждение: config восстановлен, но mihomo.service не удалось перезапустить.${NC}"
+    elif command -v docker >/dev/null 2>&1; then
+        MIHOMO_C=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep "mihomo" | head -n1 || true)
+        if [ -n "$MIHOMO_C" ]; then
+            docker restart "$MIHOMO_C" >/dev/null || echo -e "${RED}Предупреждение: config восстановлен, но контейнер Mihomo не удалось перезапустить.${NC}"
+        fi
+    fi
+
+    rm -f "$STATE_DIR/mihomo_config_original.yaml"
+    rm -f "$STATE_DIR/mihomo_config_path"
+    rm -f "$STATE_DIR/mihomo_patched_sha256"
+    rm -f "$STATE_DIR/mihomo_config_diverged"
+fi
+
 # Удаление generated files
 rm -f "$SYSTEMD_DIR/warp-docker-routing.service"
 rm -f "$SYSTEMD_DIR/check-warp-routing.service"
@@ -98,5 +156,5 @@ rmdir "$STATE_DIR" 2>/dev/null || true
 systemctl daemon-reload
 
 echo -e "${GREEN}Маршрутизация проекта удалена.${NC}"
-echo -e "${YELLOW}Важно: live sysctl, systemd-resolved/resolv.conf и пропатченный config.yaml Mihomo"
-echo -e "пока не восстанавливаются автоматически; проверь README перед ручным rollback.${NC}"
+echo -e "${YELLOW}Важно: live sysctl и systemd-resolved/original resolv.conf пока не восстанавливаются автоматически."
+echo -e "Mihomo config восстанавливается только при безопасном checksum-match; иначе snapshot сохраняется для ручного rollback.${NC}"
