@@ -253,20 +253,31 @@ sudo ./uninstall.sh
 Это:
 - остановит и отключит routing/watchdog-сервисы;
 - вызовет `cleanup` и удалит созданные проектом `iptables`, `ip rule` и routing-table routes;
-- удалит generated scripts, systemd units и `/etc/sysctl.d/99-amnezia-mihomo.conf`.
+- удалит generated scripts, systemd units и `/etc/sysctl.d/99-amnezia-mihomo.conf`;
+- удалит запись `100 mihomo` из `/etc/iproute2/rt_tables`, если после cleanup таблица больше никем не используется;
+- удалит `/etc/docker/daemon.json`, **только если этот файл создал installer и он не был изменён позже**;
+- для старых установок без state marker распознает только точный legacy-файл вида
+  `{"dns": ["<docker0-gateway>"]}`, который создавали прежние версии installer'а, и после удаления перезапустит Docker.
 
-**Важно: это не полный rollback сервера к состоянию до установки.** Текущий `uninstall.sh`
-не восстанавливает автоматически:
+Новые установки хранят ownership-markers в `/var/lib/amnezia-mihomo-gateway`.
+Это нужно, чтобы uninstall не удалял пользовательский `daemon.json`.
+
+**Почему это важно.** На живом Debian 12 сервере 23.09.2026 после отключения gateway остался старый
+`daemon.json` с `"dns": ["172.17.0.1"]`. Docker продолжал отправлять DNS контейнера в Mihomo,
+хотя TUN/policy routing уже были отключены. В результате `amnezia-awg` получал
+`Resolving timed out`. После удаления override Docker снова использовал DNS хоста
+(1.1.1.1 / 8.8.8.8), и DNS/HTTPS внутри контейнера сразу восстановились.
+
+**Важно: это всё ещё не полный rollback сервера к состоянию до установки.** `uninstall.sh`
+пока не восстанавливает автоматически:
 
 - live-значения sysctl, уже применённые installer'ом;
 - `systemd-resolved`, если installer его отключил;
 - прежний `/etc/resolv.conf` и его immutable attribute;
-- запись `100 mihomo` в `/etc/iproute2/rt_tables`;
-- `/etc/docker/daemon.json`, если installer создал его;
 - автоматически пропатченный `config.yaml` Mihomo.
 
 Перед patch `config.yaml` installer создаёт backup `.bak.<timestamp>`, но выбор и
-восстановление нужного backup остаются ручной операцией.
+восстановление нужного backup пока остаются ручной операцией.
 
 ---
 
