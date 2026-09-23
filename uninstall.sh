@@ -71,10 +71,10 @@ fi
 
 # Удаляем регистрацию таблицы только когда она больше никем не используется.
 if [ -f "$RT_TABLES_FILE" ] &&
-   grep -Eq "^[[:space:]]*$TABLE_ID[[:space:]]+$TABLE_NAME[[:space:]]*$" "$RT_TABLES_FILE"; then
+   grep -Eq "^[[:space:]]*${TABLE_ID}[[:space:]]+${TABLE_NAME}[[:space:]]*$" "$RT_TABLES_FILE"; then
     if ! ip rule show | grep -Eq "lookup ($TABLE_ID|$TABLE_NAME)( |$)" &&
        ! ip route show table "$TABLE_ID" 2>/dev/null | grep -q .; then
-        sed -i -E "/^[[:space:]]*$TABLE_ID[[:space:]]+$TABLE_NAME[[:space:]]*$/d" "$RT_TABLES_FILE"
+        sed -i -E "/^[[:space:]]*${TABLE_ID}[[:space:]]+${TABLE_NAME}[[:space:]]*$/d" "$RT_TABLES_FILE"
     else
         echo -e "${YELLOW}Таблица $TABLE_ID/$TABLE_NAME ещё используется; запись в rt_tables оставлена.${NC}"
     fi
