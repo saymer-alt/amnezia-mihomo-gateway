@@ -311,6 +311,14 @@ cat << EOF > /usr/local/sbin/check-warp-routing.sh
 #!/bin/sh
 PROXY_IF="$PROXY_IF"
 DOCKER_NETS="$DOCKER_NETS"
+TABLE_ID="$TABLE_ID"
+TABLE_NAME="$TABLE_NAME"
+
+routing_ok() {
+    ip link show "\$PROXY_IF" >/dev/null 2>&1 &&
+    ip rule show | grep -F "from \$DOCKER_NETS lookup " | grep -Eq "lookup (\$TABLE_ID|\$TABLE_NAME)( |\$)" &&
+    ip route show table "\$TABLE_ID" | grep -Fq "default dev \$PROXY_IF"
+}
 
 if ! ip link show "\$PROXY_IF" >/dev/null 2>&1; then
     logger "warp-check: Интерфейс \$PROXY_IF отсутствует. Пытаюсь перезапустить Mihomo..."
@@ -328,12 +336,25 @@ if ! ip link show "\$PROXY_IF" >/dev/null 2>&1; then
     done
 fi
 
-if ! ip rule | grep -q "from \$DOCKER_NETS lookup 100"; then
-    logger "warp-check: Правила слетели. Восстанавливаю..."
-    systemctl restart warp-docker-routing.service
+if routing_ok; then
+    exit 0
+fi
+
+logger "warp-check: Правила маршрутизации отсутствуют или неполны. Восстанавливаю..."
+if ! systemctl restart warp-docker-routing.service; then
+    logger "warp-check: ОШИБКА — не удалось перезапустить warp-docker-routing.service"
     exit 1
 fi
-exit 0
+
+sleep 1
+
+if routing_ok; then
+    logger "warp-check: Правила успешно восстановлены."
+    exit 0
+fi
+
+logger "warp-check: ОШИБКА — правила не восстановились после перезапуска."
+exit 1
 EOF
 chmod +x /usr/local/sbin/check-warp-routing.sh
 
