@@ -262,7 +262,10 @@ sudo ./uninstall.sh
 Новые установки хранят ownership-markers в `/var/lib/amnezia-mihomo-gateway`.
 Это нужно, чтобы uninstall не удалял пользовательский `daemon.json`.
 
-**Почему это важно.** На живом Debian 12 сервере 23.09.2026 после отключения gateway остался старый
+**Почему это важно.** На живом Debian 12 сервере 23.09.2026 обнаружились два legacy-хвоста.
+Во-первых, после удаления gateway в Mihomo оставались installer-патчи (`tun`, `fake-ip-range`,
+`find-process-mode: off`, `store-selected/store-fake-ip: false` и другие значения), потому что
+старый uninstall не восстанавливал pre-install config. Во-вторых, остался старый
 `daemon.json` с `"dns": ["172.17.0.1"]`. Docker продолжал отправлять DNS контейнера в Mihomo,
 хотя TUN/policy routing уже были отключены. В результате `amnezia-awg` получал
 `Resolving timed out`. После удаления override Docker снова использовал DNS хоста
@@ -274,10 +277,15 @@ sudo ./uninstall.sh
 - live-значения sysctl, уже применённые installer'ом;
 - `systemd-resolved`, если installer его отключил;
 - прежний `/etc/resolv.conf` и его immutable attribute;
-- автоматически пропатченный `config.yaml` Mihomo.
+- автоматически пропатченный `config.yaml` Mihomo для **legacy-установок**, сделанных до появления ownership-state.
 
-Перед patch `config.yaml` installer создаёт backup `.bak.<timestamp>`, но выбор и
-восстановление нужного backup пока остаются ручной операцией.
+Для новых установок installer сохраняет точный pre-install snapshot Mihomo в
+`/var/lib/amnezia-mihomo-gateway/mihomo_config_original.yaml` и checksum пропатченного файла.
+При uninstall исходный конфиг восстанавливается автоматически **только если текущий config.yaml
+не менялся после installer'а**. Если администратор правил его вручную, uninstall ничего не
+перезаписывает и оставляет snapshot для ручного сравнения/rollback.
+
+Обычный timestamp-backup `config.yaml.bak.<timestamp>` также продолжает создаваться перед каждым patch.
 
 ---
 
