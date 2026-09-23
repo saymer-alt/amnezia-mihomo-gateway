@@ -7,6 +7,18 @@ and from **observations whose root cause is not yet proven**.
 The goal is to prevent later documentation or agents from turning a plausible explanation into a
 claimed fact.
 
+## Rollout decision
+
+On 2026-09-23 the work was deliberately split instead of waiting for a disposable VPS before saving
+all progress:
+
+- `stable` received **tracking-only** installer state capture and audit documentation, so new
+  installations already preserve ownership/snapshots needed for safe rollback;
+- PR #4 keeps the **automatic rollback actions** out of production until a disposable-VPS
+  `install -> reboot -> uninstall` validation is completed.
+
+This is intentional: collect evidence now, automate restoration only after live validation.
+
 ## Confirmed on live servers
 
 ### Watchdog accepted only numeric table name
@@ -125,9 +137,13 @@ These were discovered during the same server session but must not be presented a
 
 - a duplicate custom logrotate rule caused `logrotate.service` failure; removing that unrelated custom
   rule restored a clean systemd state;
-- WARPSCOUT on SE2 showed WG mostly healthy, MASQUE-H2 70/70 working via FRA, while MASQUE/QUIC had
-  only 1/14 working in that run. This is useful operational evidence for the server's WARP transport
-  choice, not evidence about installer/uninstaller correctness.
+- WARPSCOUT on SE2 showed WG mostly healthy. On a fresh separate WARP account, MASQUE-H2 was 70/70
+  working via FRA while MASQUE/QUIC was 1/14 with the default SNI. Repeating with `SNI=4pda.to`
+  (matching the current Mihomo MASQUE proxies) yielded QUIC 2/14 and H2 still 70/70, both `SEEN AS SE`
+  via FRA. This strengthens the operational observation that H2 is much more robust on this SE2 path,
+  but does not prove the current Mihomo QUIC proxy is broken because the account/endpoints/ports differ.
+  Mihomo's own health data at the same time showed QUIC ~40 ms, H2 ~42 ms, with `Fastest_MASQUE`
+  selecting H2. This is not evidence about installer/uninstaller correctness.
 
 ## Required validation before release
 
