@@ -69,8 +69,10 @@ if [ "$DOCKER_RESTART_NEEDED" -eq 1 ]; then
     fi
 fi
 
-# Удаляем регистрацию таблицы только когда она больше никем не используется.
-if [ -f "$RT_TABLES_FILE" ] &&
+# Удаляем регистрацию таблицы только если installer сам добавил её и
+# после routing cleanup таблица больше никем не используется.
+if [ -f "$STATE_DIR/rt_table_added" ] &&
+   [ -f "$RT_TABLES_FILE" ] &&
    grep -Eq "^[[:space:]]*${TABLE_ID}[[:space:]]+${TABLE_NAME}[[:space:]]*$" "$RT_TABLES_FILE"; then
     if ! ip rule show | grep -Eq "lookup ($TABLE_ID|$TABLE_NAME)( |$)" &&
        ! ip route show table "$TABLE_ID" 2>/dev/null | grep -q .; then
@@ -78,6 +80,9 @@ if [ -f "$RT_TABLES_FILE" ] &&
     else
         echo -e "${YELLOW}Таблица $TABLE_ID/$TABLE_NAME ещё используется; запись в rt_tables оставлена.${NC}"
     fi
+elif [ -f "$RT_TABLES_FILE" ] &&
+     grep -Eq "^[[:space:]]*${TABLE_ID}[[:space:]]+${TABLE_NAME}[[:space:]]*$" "$RT_TABLES_FILE"; then
+    echo -e "${YELLOW}Найдена legacy-запись $TABLE_ID $TABLE_NAME без ownership marker; автоматически не удаляю.${NC}"
 fi
 
 # Восстанавливаем точный pre-install config Mihomo только когда можем доказать,
