@@ -41,7 +41,17 @@ OUT
 esac
 EOF
 
-chmod +x "$MOCK_BIN/systemctl" "$MOCK_BIN/ip"
+cat > "$MOCK_BIN/mihomo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "-t -d "* ]]; then
+  exit 0
+fi
+echo "unexpected mihomo invocation: $*" >&2
+exit 2
+EOF
+
+chmod +x "$MOCK_BIN/systemctl" "$MOCK_BIN/ip" "$MOCK_BIN/mihomo"
 
 run_uninstall() {
   local case_dir="$1"
@@ -104,5 +114,33 @@ if grep -Fxq 'restart docker' "$SYSTEMCTL_LOG"; then
   exit 1
 fi
 echo "PASS: modified/custom daemon.json preserved"
+
+# An unchanged installer-patched Mihomo config is safe to replace with the exact
+# pre-install snapshot.
+CASE="$TMP_DIR/mihomo-restore"
+prepare_case "$CASE"
+printf 'original: true\nprofile:\n  store-selected: true\n' > "$CASE/state/mihomo_config_original.yaml"
+printf '%s\n' "$CASE/mihomo-config.yaml" > "$CASE/state/mihomo_config_path"
+printf 'patched: true\nprofile:\n  store-selected: false\n' > "$CASE/mihomo-config.yaml"
+sha256sum "$CASE/mihomo-config.yaml" | awk '{print $1}' > "$CASE/state/mihomo_patched_sha256"
+run_uninstall "$CASE"
+grep -Fq 'original: true' "$CASE/mihomo-config.yaml"
+grep -Fq 'store-selected: true' "$CASE/mihomo-config.yaml"
+test ! -e "$CASE/state/mihomo_config_original.yaml"
+echo "PASS: unchanged Mihomo config restored from exact pre-install snapshot"
+
+# If the administrator edited Mihomo after install, uninstall must preserve the
+# live config and keep the original snapshot for manual rollback.
+CASE="$TMP_DIR/mihomo-modified"
+prepare_case "$CASE"
+printf 'original: true\n' > "$CASE/state/mihomo_config_original.yaml"
+printf '%s\n' "$CASE/mihomo-config.yaml" > "$CASE/state/mihomo_config_path"
+printf 'patched: true\n' > "$CASE/mihomo-config.yaml"
+printf '%s\n' 'deadbeef' > "$CASE/state/mihomo_patched_sha256"
+printf 'admin-change: keep-me\n' > "$CASE/mihomo-config.yaml"
+run_uninstall "$CASE"
+grep -Fq 'admin-change: keep-me' "$CASE/mihomo-config.yaml"
+test -e "$CASE/state/mihomo_config_original.yaml"
+echo "PASS: administrator-modified Mihomo config preserved"
 
 echo "All uninstall state regression tests passed."
