@@ -24,6 +24,7 @@ run ONLY on the target VPS, never on the development host.
 | `install.md` | Short RU installation guide; the heading "awg-warp-router" is the old project name |
 | `scripts/` | Reference templates of generated scripts with placeholders `<DOCKER_SUBNET>`, `<WG_PORT>`, `<HOST_INTERFACE>`; they are NOT executed and lag behind install.sh (see "Known inconsistencies") |
 | `systemd/` | Reference copies of the three units; they match the heredocs in install.sh |
+| `docs/LIVE_AUDIT_2026-09-23.md` | Live VPS evidence ledger and release gate for rollback work |
 | `LICENSE` | MIT |
 
 The repository has lightweight GitHub Actions CI. CI deliberately does not emulate a real VPS, Docker, iptables, or live WARP:
@@ -49,13 +50,15 @@ the generated watchdog logic (including named/numeric routing-table aliases and 
 2. `/etc/sysctl.d/99-amnezia-mihomo.conf`: `rp_filter=0` (required for gvisor); BBR+fq
    are added ONLY if congestion control is not already bbr; `ip_forward=1` only if disabled —
    existing network hardening is not overwritten. Also disables rp_filter live on all interfaces.
-3. Table `100 mihomo` in `/etc/iproute2/rt_tables` (if the entry does not exist).
+3. Table `100 mihomo` in `/etc/iproute2/rt_tables` (if the entry does not exist). Current production installer records an ownership marker when it adds the entry.
 4. DNS: if systemd-resolved is active, disables it, writes `/etc/resolv.conf`
    (1.1.1.1 / 8.8.8.8), and applies `chattr +i`.
 5. `/etc/docker/daemon.json` (DNS = docker0) — written ONLY if the file does not exist; an existing file is
-   left untouched (Docker is restarted only in this branch).
+   left untouched (Docker is restarted only in this branch). Current production installer records ownership,
+   checksum and docker0 gateway when it creates this file.
 6. Auto-patches the Mihomo config: searches for `config.yaml` in `/etc/mihomo /opt/mihomo /root /home`
-   (maxdepth 3), creates backup `.bak.<epoch>`, then applies 10 sed/awk changes: `fake-ip-range: 198.18.0.0/16`,
+   (maxdepth 3), creates backup `.bak.<epoch>`, stores the exact first pre-install config plus path/checksum
+   metadata in `/var/lib/amnezia-mihomo-gateway`, then applies 10 sed/awk changes: `fake-ip-range: 198.18.0.0/16`,
    `inet4-address: 10.255.255.1/30`, `stack: gvisor`, `auto-route: false`, `mtu: 1420`,
    `gso: true`, `auto-detect-interface: true`, `find-process-mode: off`,
    `store-selected/store-fake-ip: false`, removal of `endpoint-independent-nat`. Every change
@@ -74,7 +77,8 @@ the generated watchdog logic (including named/numeric routing-table aliases and 
    and `enable --now` for the service and timer.
 
 Repeated execution of install.sh is idempotent: a new Mihomo config `.bak` is created, rules are recreated,
-and existing sysctl/DNS values are not duplicated.
+and existing sysctl/DNS values are not duplicated. State tracking is metadata-only; production `uninstall.sh`
+still does not perform the new automatic rollback until disposable-VPS validation is completed.
 
 ## Core logic (change only with understanding and an owner decision)
 
@@ -151,9 +155,10 @@ and existing sysctl/DNS values are not duplicated.
   `10.255.255.1/30` and `198.18.0.0/16`.
 - `install.md` is headed with the old name "awg-warp-router".
 - `uninstall.sh` says "the server returned to standard settings", but in reality it does NOT
-  restore systemd-resolved, leaves `/etc/resolv.conf` with the `+i` attribute, and leaves the
-  `100 mihomo` entry in `/etc/iproute2/rt_tables`. Documenting the behavior is allowed; changing it requires
-  the owner.
+  restore systemd-resolved, leaves `/etc/resolv.conf` with the `+i` attribute, may leave the
+  `100 mihomo` entry, Docker DNS override, and installer-patched Mihomo config. Production install now
+  records ownership/pre-install metadata, but automatic rollback remains gated on disposable-VPS validation.
+  See `docs/LIVE_AUDIT_2026-09-23.md`.
 
 ## Technical debt
 
