@@ -62,6 +62,10 @@ TABLE_ID="100"
 TABLE_NAME="mihomo"
 FAKE_IP_RANGE="198.18.0.0/16"
 TUN_INET_ADDR="10.255.255.1/30"
+STATE_DIR="/var/lib/amnezia-mihomo-gateway"
+
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR"
 
 echo -e "${GREEN}Настройки определены:${NC}"
 echo -e " - Сеть Docker: $DOCKER_NETS"
@@ -100,6 +104,7 @@ for i in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "$i"; done
 # 2.5 Именованная таблица маршрутизации
 if ! grep -q "^$TABLE_ID $TABLE_NAME$" /etc/iproute2/rt_tables; then
     echo "$TABLE_ID $TABLE_NAME" >> /etc/iproute2/rt_tables
+    : > "$STATE_DIR/rt_table_added"
 fi
 
 # 2.6 DNS
@@ -127,8 +132,11 @@ if [ -n "$DOCKER_GW" ]; then
   "dns": ["$DOCKER_GW"]
 }
 EOF
+        : > "$STATE_DIR/docker_daemon_created"
+        sha256sum /etc/docker/daemon.json | awk '{print $1}' > "$STATE_DIR/docker_daemon_sha256"
+        printf '%s\n' "$DOCKER_GW" > "$STATE_DIR/docker_dns_gateway"
         systemctl restart docker
-        echo -e "${CYAN}    -> Docker DNS настроен.${NC}"
+        echo -e "${CYAN}    -> Docker DNS настроен и отмечен как управляемый installer'ом.${NC}"
     else
         echo -e "${CYAN}    -> daemon.json уже существует, пропускаем.${NC}"
     fi
