@@ -39,6 +39,25 @@ because it distinguishes uninstall residue from failures that can occur during a
   explicit Mihomo/WARP path reported `loc=EE`, `colo=ARN`, `warp=on`. This is recorded as
   path evidence only, not as a routing invariant.
 
+### EE WARPSCOUT snapshot
+
+A fresh WARPSCOUT 0.16.0 account was registered on the same EE VPS and scanned from the
+host network with `SNI=4pda.to` for MASQUE:
+
+- WireGuard: 68/70 working, 1 torn down after handshake; all observed nodes were `ARN`,
+  `SEEN AS=EE`, with about 7-8 ms in-tunnel ping. One `-best` run selected
+  `8.34.146.127:2408` at 7 ms TUN ping and 0% loss.
+- MASQUE H3/QUIC: 8/14 working, 2 torn down after handshake; `NODE=ARN`,
+  `SEEN AS=EE`, about 7-8 ms in-tunnel ping.
+- MASQUE H2: 56/70 working, 3 torn down after handshake; `NODE=ARN`,
+  `SEEN AS=EE`, about 7 ms in-tunnel ping.
+
+In this snapshot H2 had a higher working ratio than H3, but unlike the earlier SE2 scan it
+was not perfect. WG was the most broadly reachable of the three. These measurements are
+time- and path-specific diagnostics, not a claim that H2 or any listed endpoint will remain
+universally superior.
+
+
 ### Design consequence from the EE firewall case
 
 If a future installer continues to make Docker use a DNS service on the host, reachability of that
