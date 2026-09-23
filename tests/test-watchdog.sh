@@ -32,6 +32,7 @@ export PROXY_IF DOCKER_NETS TABLE_ID TABLE_NAME
 
 bash "$FRAGMENT"
 sh -n "$GENERATED"
+chmod +x "$GENERATED"
 
 cat > "$MOCK_BIN/ip" <<'EOF'
 #!/usr/bin/env bash
