@@ -108,6 +108,9 @@ and existing sysctl/DNS values are not duplicated.
 - The watchdog restarts Mihomo once per minute if `tun-mihomo` is absent and restarts
   `warp-docker-routing.service` if rules disappear — check changes to this loop for
   restart loops.
+  Table 100 is registered as `100 mihomo`, so `ip rule show` may render the same rule as
+  `lookup mihomo` instead of `lookup 100`; watchdog checks must accept both forms and must
+  re-check state after self-heal before returning failure.
 - Do not unify the "service stopped" and "tun-mihomo crashed" scenarios — they have different effects
   (direct egress vs black hole).
 
