@@ -115,6 +115,13 @@ and existing sysctl/DNS values are not duplicated.
 - Do not unify the "service stopped" and "tun-mihomo crashed" scenarios — they have different effects
   (direct egress vs black hole).
 
+## VPS helper tools and PATH
+
+- When preparing or auditing a new Debian/Ubuntu VPS, do not assume that a CLI tool is absent just because \`command -v <tool>\` or a bare command returns \`command not found\`. User-local installers commonly place binaries in \`~/.local/bin\`, and root's non-login/non-interactive PATH may not include that directory.
+- **warpscout:** before reinstalling it, check both \`command -v warpscout\` and \`~/.local/bin/warpscout\`. The official installer may report that warpscout is already installed in \`/root/.local/bin\` even though typing \`warpscout\` fails.
+- If \`~/.local/bin/warpscout\` exists, use that binary and make \`~/.local/bin\` persistently available in PATH for future administration/automation. Prefer an idempotent PATH change (do not add duplicate PATH entries), then verify in a fresh shell with \`command -v warpscout\` and \`warpscout version\`.
+- This check should be part of future VPS bootstrap/automation work so an agent does not unnecessarily download/reinstall an already present warpscout binary.
+
 ## Agent working rules
 
 1. Before changing existing behavior, understand why it exists (the comment at the top of
