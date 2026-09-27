@@ -62,6 +62,10 @@ TABLE_ID="100"
 TABLE_NAME="mihomo"
 FAKE_IP_RANGE="198.18.0.0/16"
 TUN_INET_ADDR="10.255.255.1/30"
+STATE_DIR="/var/lib/amnezia-mihomo-gateway"
+
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR"
 
 echo -e "${GREEN}Настройки определены:${NC}"
 echo -e " - Сеть Docker: $DOCKER_NETS"
@@ -100,6 +104,7 @@ for i in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "$i"; done
 # 2.5 Именованная таблица маршрутизации
 if ! grep -q "^$TABLE_ID $TABLE_NAME$" /etc/iproute2/rt_tables; then
     echo "$TABLE_ID $TABLE_NAME" >> /etc/iproute2/rt_tables
+    : > "$STATE_DIR/rt_table_added"
 fi
 
 # 2.6 DNS
@@ -127,8 +132,11 @@ if [ -n "$DOCKER_GW" ]; then
   "dns": ["$DOCKER_GW"]
 }
 EOF
+        : > "$STATE_DIR/docker_daemon_created"
+        sha256sum /etc/docker/daemon.json | awk '{print $1}' > "$STATE_DIR/docker_daemon_sha256"
+        printf '%s\n' "$DOCKER_GW" > "$STATE_DIR/docker_dns_gateway"
         systemctl restart docker
-        echo -e "${CYAN}    -> Docker DNS настроен.${NC}"
+        echo -e "${CYAN}    -> Docker DNS настроен и отмечен как управляемый installer'ом.${NC}"
     else
         echo -e "${CYAN}    -> daemon.json уже существует, пропускаем.${NC}"
     fi
@@ -139,7 +147,32 @@ echo -e "${YELLOW}[*] Поиск и патч config.yaml Mihomo...${NC}"
 MIHOMO_CONFIG=$(find /etc/mihomo /opt/mihomo /root /home -maxdepth 3 -name "config.yaml" 2>/dev/null | head -n1)
 if [ -n "$MIHOMO_CONFIG" ]; then
     echo -e "${GREEN}    Найден конфиг: $MIHOMO_CONFIG${NC}"
-    cp "$MIHOMO_CONFIG" "$MIHOMO_CONFIG.bak.$(date +%s)"
+
+    # Всегда оставляем обычный timestamp-backup рядом с config.yaml.
+    MIHOMO_BACKUP="$MIHOMO_CONFIG.bak.$(date +%s)"
+    cp "$MIHOMO_CONFIG" "$MIHOMO_BACKUP"
+
+    # Для безопасного uninstall храним один точный pre-install snapshot.
+    # Повторный install поверх неизменённого project-patched config не перезаписывает
+    # оригинал. Если администратор менял config.yaml между запусками installer'а,
+    # automatic rollback блокируется, чтобы не затереть его изменения.
+    CURRENT_MIHOMO_SHA=$(sha256sum "$MIHOMO_CONFIG" | awk '{print $1}')
+    if [ -f "$STATE_DIR/mihomo_config_path" ] &&
+       [ -f "$STATE_DIR/mihomo_patched_sha256" ]; then
+        PREVIOUS_CONFIG=$(cat "$STATE_DIR/mihomo_config_path" 2>/dev/null || true)
+        PREVIOUS_PATCHED_SHA=$(cat "$STATE_DIR/mihomo_patched_sha256" 2>/dev/null || true)
+        if [ "$PREVIOUS_CONFIG" != "$MIHOMO_CONFIG" ] ||
+           [ "$CURRENT_MIHOMO_SHA" != "$PREVIOUS_PATCHED_SHA" ]; then
+            : > "$STATE_DIR/mihomo_config_diverged"
+            echo -e "${YELLOW}    -> config.yaml менялся после предыдущей установки; automatic rollback будет отключён.${NC}"
+        fi
+    fi
+
+    if [ ! -f "$STATE_DIR/mihomo_config_original.yaml" ]; then
+        cp "$MIHOMO_CONFIG" "$STATE_DIR/mihomo_config_original.yaml"
+        chmod 600 "$STATE_DIR/mihomo_config_original.yaml"
+        printf '%s\n' "$MIHOMO_CONFIG" > "$STATE_DIR/mihomo_config_path"
+    fi
 
     # 1. fake-ip-range
     sed -i -E "s|fake-ip-range:.*|fake-ip-range: $FAKE_IP_RANGE|g" "$MIHOMO_CONFIG"
@@ -189,7 +222,9 @@ if [ -n "$MIHOMO_CONFIG" ]; then
     # 10. Убираем endpoint-independent-nat, если был (ломает gvisor)
     sed -i '/endpoint-independent-nat/d' "$MIHOMO_CONFIG"
 
+    sha256sum "$MIHOMO_CONFIG" | awk '{print $1}' > "$STATE_DIR/mihomo_patched_sha256"
     echo -e "${GREEN}    Патчи применены: stack: gvisor, auto-route: false, mtu: 1420, gso: true, find-process-mode: off, store-*: false${NC}"
+    echo -e "${CYAN}    -> Точный pre-install config сохранён для безопасного uninstall.${NC}"
 else
     echo -e "${YELLOW}    Конфиг config.yaml не найден автоматически. Проверьте вручную!${NC}"
 fi
