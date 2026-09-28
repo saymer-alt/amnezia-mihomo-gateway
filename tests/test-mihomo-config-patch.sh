@@ -49,8 +49,15 @@ fi
 
 MIHOMO_CONFIG="$CONFIG"
 FAKE_IP_RANGE="198.18.0.0/16"
-export MIHOMO_CONFIG FAKE_IP_RANGE
+STATE_DIR="$TMP_DIR/state"
+mkdir -p "$STATE_DIR"
+export MIHOMO_CONFIG FAKE_IP_RANGE STATE_DIR
 bash "$FRAGMENT"
+
+if [[ ! -s "$STATE_DIR/mihomo_patched_sha256" ]]; then
+  echo "FAIL: installer patch did not record the patched Mihomo checksum" >&2
+  exit 1
+fi
 
 assert_line() {
   local pattern="$1"
