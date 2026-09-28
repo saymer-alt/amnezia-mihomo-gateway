@@ -42,6 +42,12 @@ jobs:
           fi
           shellcheck -S error install.sh uninstall.sh scripts/*.sh tests/*.sh
 
+      - name: Mihomo config patch regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/test-mihomo-config-patch.sh
+
       - name: Watchdog regression tests
         shell: bash
         run: |

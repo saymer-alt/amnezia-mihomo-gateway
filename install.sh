@@ -61,7 +61,6 @@ PROXY_IF="tun-mihomo"
 TABLE_ID="100"
 TABLE_NAME="mihomo"
 FAKE_IP_RANGE="198.18.0.0/16"
-TUN_INET_ADDR="10.255.255.1/30"
 
 echo -e "${GREEN}Настройки определены:${NC}"
 echo -e " - Сеть Docker: $DOCKER_NETS"
@@ -143,8 +142,14 @@ if [ -n "$MIHOMO_CONFIG" ]; then
 
     # 1. fake-ip-range
     sed -i -E "s|fake-ip-range:.*|fake-ip-range: $FAKE_IP_RANGE|g" "$MIHOMO_CONFIG"
-    # 2. inet4-address
-    sed -i -E "s|inet4-address:.*|inet4-address: $TUN_INET_ADDR|g" "$MIHOMO_CONFIG"
+    # 2. Удаляем legacy top-level tun.inet4-address: в Mihomo 1.19.31
+    #    RawTun.Inet4Address не разбирается. Per-proxy listeners не трогаем.
+    awk '
+      /^tun:[[:space:]]*$/ { in_tun=1; print; next }
+      in_tun && /^[^#[:space:]]/ { in_tun=0 }
+      in_tun && /^[[:space:]]+inet4-address:[[:space:]]*/ { next }
+      { print }
+    ' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
     # 3. stack: gvisor (жёстко)
     if grep -q "^\s*stack:" "$MIHOMO_CONFIG"; then
         sed -i -E "s|^([[:space:]]*)stack:.*|\1stack: gvisor|g" "$MIHOMO_CONFIG"
@@ -402,15 +407,16 @@ echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Верс
 echo -e "${GREEN}========================================================${NC}"
 echo -e "${YELLOW}Скрипт автоматически пропатчил config.yaml Mihomo:${NC}"
 echo -e "  1. fake-ip-range: $FAKE_IP_RANGE"
-echo -e "  2. inet4-address: $TUN_INET_ADDR"
+echo -e "  2. legacy top-level tun.inet4-address удалён"
 echo -e "  3. stack: gvisor (SSH безопасность)"
 echo -e "  4. auto-route: false"
 echo -e "  5. mtu: 1420"
 echo -e "  6. gso: true"
-echo -e "  7. find-process-mode: off"
-echo -e "  8. store-selected: false, store-fake-ip: false"
-echo -e "  9. TCPMSS --clamp-mss-to-pmtu (проверено: +~2x скорость)"
+echo -e "  7. auto-detect-interface: true"
+echo -e "  8. find-process-mode: off"
+echo -e "  9. store-selected: false, store-fake-ip: false"
 echo -e "  10. endpoint-independent-nat удалён (ломает gvisor)"
+echo -e "  + TCPMSS --clamp-mss-to-pmtu (проверено: +~2x скорость)"
 echo ""
 echo -e "${CYAN}Проверка: запустите спидтест с клиента.${NC}"
 echo -e "${CYAN}Ожидаемая скорость: 35-45 / 70-90+ Мбит на 2-core VPS${NC}"
