@@ -122,10 +122,12 @@ been validated on a disposable VPS. Therefore those automatic rollback actions a
 
 ## Observed, not proven
 
-- On SE2 with Mihomo 1.19.31, configured `inet4-address: 10.255.255.1/30` differed from the live
-  TUN address `198.18.0.0/30`. The same config-vs-live mismatch was observed again on the EE
-  Ubuntu 24.04 host while its gateway was active. Repetition makes this worth investigating, but
-  the root cause is still not proven.
+- On 2026-09-23, SE2 and EE showed that configured `inet4-address: 10.255.255.1/30` differed from
+  the live TUN address `198.18.0.0/30`; at that time the cause was not yet proven.
+  Follow-up on 2026-09-28 inspected Mihomo 1.19.31 source and repeated the check on a live Ubuntu 24.04 VPS:
+  top-level `RawTun.Inet4Address` is not parsed, the effective top-level TUN IPv4 prefix is derived from
+  `dns.fake-ip-range` and forced to `/30`, and removing the legacy field left the live interface at
+  `198.18.0.0/30`. `mihomo -t`, routing, Speedtest and client Internet/Instagram all remained healthy.
 - Martian log messages were not eliminated entirely by removing TUN, so TUN is not established as
   their sole cause.
 - On the EE production Mihomo runtime, logs contained `H3_REQUEST_CANCELLED`,

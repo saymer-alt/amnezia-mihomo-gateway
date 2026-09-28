@@ -24,12 +24,12 @@ run ONLY on the target VPS, never on the development host.
 | `install.md` | Short RU installation guide; the heading "awg-warp-router" is the old project name |
 | `scripts/` | Reference templates of generated scripts with placeholders `<DOCKER_SUBNET>`, `<WG_PORT>`, `<HOST_INTERFACE>`; they are NOT executed and lag behind install.sh (see "Known inconsistencies") |
 | `systemd/` | Reference copies of the three units; they match the heredocs in install.sh |
-| `docs/LIVE_AUDIT_2026-09-23.md` | Live VPS evidence ledger and release gate for rollback work |
+| `docs/LIVE_AUDIT_2026-09-23.md` | Live VPS evidence ledger and release gates for rollback/firewall work |
 | `LICENSE` | MIT |
 
 The repository has lightweight GitHub Actions CI. CI deliberately does not emulate a real VPS, Docker, iptables, or live WARP:
-those still require deployment to a test VPS. Automated checks cover shell syntax, ShellCheck errors, and regression tests for
-the generated watchdog logic (including named/numeric routing-table aliases and self-heal behavior).
+those still require deployment to a test VPS. Automated checks cover shell syntax, ShellCheck errors, regression tests for the Mihomo config patch contract,
+and regression tests for the generated watchdog logic (including named/numeric routing-table aliases and self-heal behavior).
 
 ## Stack and available checks
 
@@ -50,16 +50,16 @@ the generated watchdog logic (including named/numeric routing-table aliases and 
 2. `/etc/sysctl.d/99-amnezia-mihomo.conf`: `rp_filter=0` (required for gvisor); BBR+fq
    are added ONLY if congestion control is not already bbr; `ip_forward=1` only if disabled —
    existing network hardening is not overwritten. Also disables rp_filter live on all interfaces.
-3. Table `100 mihomo` in `/etc/iproute2/rt_tables` (if the entry does not exist). Current production installer records an ownership marker when it adds the entry.
+3. Table `100 mihomo` in `/etc/iproute2/rt_tables` (if the entry does not exist). The installer records an ownership marker when it adds the entry.
 4. DNS: if systemd-resolved is active, disables it, writes `/etc/resolv.conf`
    (1.1.1.1 / 8.8.8.8), and applies `chattr +i`.
 5. `/etc/docker/daemon.json` (DNS = docker0) — written ONLY if the file does not exist; an existing file is
-   left untouched (Docker is restarted only in this branch). Current production installer records ownership,
-   checksum and docker0 gateway when it creates this file.
+   left untouched (Docker is restarted only in this branch). When the installer creates this file it records ownership,
+   checksum and docker0 gateway in `/var/lib/amnezia-mihomo-gateway`.
 6. Auto-patches the Mihomo config: searches for `config.yaml` in `/etc/mihomo /opt/mihomo /root /home`
-   (maxdepth 3), creates backup `.bak.<epoch>`, stores the exact first pre-install config plus path/checksum
-   metadata in `/var/lib/amnezia-mihomo-gateway`, then applies 10 sed/awk changes: `fake-ip-range: 198.18.0.0/16`,
-   `inet4-address: 10.255.255.1/30`, `stack: gvisor`, `auto-route: false`, `mtu: 1420`,
+   (maxdepth 3), creates backup `.bak.<epoch>`, stores the exact first pre-install config plus path/checksum metadata
+   in `/var/lib/amnezia-mihomo-gateway`, then applies 10 sed/awk changes: `fake-ip-range: 198.18.0.0/16`,
+   removal of legacy top-level `tun.inet4-address` (per-proxy TUN listeners are preserved), `stack: gvisor`, `auto-route: false`, `mtu: 1420`,
    `gso: true`, `auto-detect-interface: true`, `find-process-mode: off`,
    `store-selected/store-fake-ip: false`, removal of `endpoint-independent-nat`. Every change
    handles both "key exists" (sed) and "key absent" (awk insertion) — preserve both branches.
@@ -78,7 +78,7 @@ the generated watchdog logic (including named/numeric routing-table aliases and 
 
 Repeated execution of install.sh is idempotent: a new Mihomo config `.bak` is created, rules are recreated,
 and existing sysctl/DNS values are not duplicated. State tracking is metadata-only; production `uninstall.sh`
-still does not perform the new automatic rollback until disposable-VPS validation is completed.
+still does not perform automatic ownership-based rollback until its disposable-VPS release gate is completed.
 
 ## Core logic (change only with understanding and an owner decision)
 
@@ -96,7 +96,7 @@ still does not perform the new automatic rollback until disposable-VPS validatio
   and returns traffic to main (direct egress) — this is intended unit behavior, not a failure.
 - **`TCPMSS --clamp-mss-to-pmtu` + `mtu: 1420`**: double encapsulation AWG+WARP; according to
   the owner's measurements, clamp gives roughly 2x speed. Do not change without new measurements.
-- **`inet4-address` on the TUN is mandatory**: MASQUERADE does not work without an IPv4 address on the interface.
+- **An IPv4 address on the TUN is required for the IPv4/NAT scenario**, but on **Mihomo 1.19.31** the top-level `RawTun.Inet4Address` field is not parsed. `parseTun()` derives the effective TUN IPv4 prefix from `dns.fake-ip-range` and forces a `/30` prefix. Do not claim that writing top-level `tun.inet4-address` controls the live address on this version. Per-proxy TUN listeners use a different config path where `inet4-address` is supported.
 - **Server TUN baseline remains `gvisor` (2026-09-21)**: testing was done with **Mihomo 1.19.31**. The owner tested `mips` on three VPS hosts and ran three comparative speed tests on the EE server. Recorded results in that EE test series were 28.9/40.0, 25.8/45.9, and 34.7/47.6 Mbps (download/upload); the owner's practical comparison showed `mips` roughly 10 Mbps worse on download than the current `gvisor` baseline. Do not switch the installer/server baseline to `mips` merely because it is newer or performs well on routers. Re-evaluate only with new VPS measurements after later Mihomo/mipstack updates.
 - **IPv4-only**: IPv6 is not routed; with `::/0` in AWG, an IPv6 leak is possible.
 
@@ -119,6 +119,13 @@ still does not perform the new automatic rollback until disposable-VPS validatio
 - Do not unify the "service stopped" and "tun-mihomo crashed" scenarios — they have different effects
   (direct egress vs black hole).
 
+## VPS helper tools and PATH
+
+- When preparing or auditing a new Debian/Ubuntu VPS, do not assume that a CLI tool is absent just because \`command -v <tool>\` or a bare command returns \`command not found\`. User-local installers commonly place binaries in \`~/.local/bin\`, and root's non-login/non-interactive PATH may not include that directory.
+- **warpscout:** before reinstalling it, check both \`command -v warpscout\` and \`~/.local/bin/warpscout\`. The official installer may report that warpscout is already installed in \`/root/.local/bin\` even though typing \`warpscout\` fails.
+- If \`~/.local/bin/warpscout\` exists, use that binary and make \`~/.local/bin\` persistently available in PATH for future administration/automation. Prefer an idempotent PATH change (do not add duplicate PATH entries), then verify in a fresh shell with \`command -v warpscout\` and \`warpscout version\`.
+- This check should be part of future VPS bootstrap/automation work so an agent does not unnecessarily download/reinstall an already present warpscout binary.
+
 ## Agent working rules
 
 1. Before changing existing behavior, understand why it exists (the comment at the top of
@@ -126,7 +133,7 @@ still does not perform the new automatic rollback until disposable-VPS validatio
    installation on an already deployed server.
 2. Do not remove or rewrite working functionality merely to "simplify" code — only do so for
    an explicit owner task.
-3. Environment values (subnet, WG_PORT, interface, 198.18.0.0/16, 10.255.255.1/30, table
+3. Environment values (subnet, WG_PORT, interface, 198.18.0.0/16, table
    100, fwmark 0x88, priorities 100/40, mtu 1420) must not be changed without understanding their purpose; in
    heredocs they are substituted from auto-detection — do not hardcode them.
 4. Auto-detection is fail-fast: if container/subnet/port detection fails, the script exits.
@@ -150,14 +157,12 @@ still does not perform the new automatic rollback until disposable-VPS validatio
   changed only install.sh, while the templates are a snapshot from 2026-07-27. The template lacks the FAKE_IP_RANGE route,
   30-second interface wait, `txqueuelen 5000`, and logger messages. Synchronizing templates is
   a separate owner decision, not a "small fix".
-- TUN config examples in README differ from what install.sh actually writes:
-  README has `inet4-address: 198.18.0.1/30` and `fake-ip-range: 240.0.0.1/4`, while the installer writes
-  `10.255.255.1/30` and `198.18.0.0/16`.
+- Historical TUN examples used an explicit top-level `inet4-address`, but Mihomo 1.19.31 derives the effective top-level TUN IPv4 prefix from `dns.fake-ip-range`. The installer now removes only the legacy top-level field while preserving per-proxy listener `inet4-address`. Keep future docs/tests tied to the target Mihomo version and live interface evidence.
 - `install.md` is headed with the old name "awg-warp-router".
 - `uninstall.sh` says "the server returned to standard settings", but in reality it does NOT
-  restore systemd-resolved, leaves `/etc/resolv.conf` with the `+i` attribute, may leave the
-  `100 mihomo` entry, Docker DNS override, and installer-patched Mihomo config. Production install now
-  records ownership/pre-install metadata, but automatic rollback remains gated on disposable-VPS validation.
+  restore systemd-resolved, leaves `/etc/resolv.conf` with the `+i` attribute, and may leave the
+  `100 mihomo` entry, Docker DNS override, and installer-patched Mihomo config. Installation records
+  ownership/pre-install metadata, but automatic rollback remains gated on disposable-VPS validation.
   See `docs/LIVE_AUDIT_2026-09-23.md`.
 
 ## Technical debt

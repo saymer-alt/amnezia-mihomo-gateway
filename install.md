@@ -68,6 +68,25 @@ sudo ./uninstall.sh
 
 ---
 
+## ⚠️ Mihomo 1.19.31 и адрес TUN
+
+Для **Mihomo 1.19.31** не используйте top-level `tun.inet4-address` как источник истины для IPv4-адреса TUN. В этой версии live IPv4-префикс top-level TUN формируется из `dns.fake-ip-range` и приводится к `/30`.
+
+Для текущего профиля проекта:
+
+```yaml
+dns:
+  fake-ip-range: 198.18.0.0/16
+```
+
+ожидаемый live-адрес `tun-mihomo` — `198.18.0.0/30`.
+
+Новый installer удаляет legacy top-level `tun.inet4-address`, если он остался от старой конфигурации. При этом `inet4-address` внутри per-proxy TUN listeners не удаляется: это другой config path Mihomo, где поле поддерживается.
+
+Перед обновлением на будущую версию Mihomo не переносите этот вывод автоматически: сначала повторно проверьте `mihomo -t`, live `ip addr show tun-mihomo` и фактическую маршрутизацию.
+
+---
+
 ## ✅ Проверка работы
 
 **На клиенте** (подключённом к AWG):
