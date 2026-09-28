@@ -185,6 +185,23 @@ if [ -n "$MIHOMO_CONFIG" ]; then
     fi
     # 4. auto-route: false
     awk '/^tun:/{f=1} f&&/auto-route:/{sub(/auto-route:.*/, "auto-route: false"); f=0} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
+
+    # 4a. Strict privacy: Mihomo 1.19.31 gVisor can otherwise create a host ICMP socket
+    #     that bypasses normal TCP/UDP proxy rule matching.
+    awk '
+      /^tun:[[:space:]]*$/ { in_tun=1; seen=0; print; next }
+      in_tun && /^[^#[:space:]]/ {
+        if (!seen) print "  disable-icmp-forwarding: true"
+        in_tun=0
+      }
+      in_tun && /^[[:space:]]+disable-icmp-forwarding:[[:space:]]*/ {
+        print "  disable-icmp-forwarding: true"
+        seen=1
+        next
+      }
+      { print }
+      END { if (in_tun && !seen) print "  disable-icmp-forwarding: true" }
+    ' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
     # 5. mtu: 1420
     if grep -q "^\s*mtu:" "$MIHOMO_CONFIG"; then
         sed -i -E "s|^([[:space:]]*)mtu:.*|\1mtu: 1420|g" "$MIHOMO_CONFIG"
@@ -240,12 +257,56 @@ WG_PORT="$WG_PORT"
 TABLE_ID="$TABLE_ID"
 HOST_IF="$HOST_IF"
 FAKE_IP_RANGE="$FAKE_IP_RANGE"
+GUARD_CHAIN="AMG_FAILSECURE"
+FAILSAFE_METRIC="42760"
+
+ensure_guard() {
+    # Independent barrier: AWG client traffic may use only TUN or the marked outer AWG reply path.
+    iptables -N "\$GUARD_CHAIN" 2>/dev/null || true
+    iptables -F "\$GUARD_CHAIN"
+    iptables -A "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -o "\$PROXY_IF" -j ACCEPT
+    iptables -A "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -m mark --mark 0x88 -o "\$HOST_IF" -j ACCEPT
+    iptables -A "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -j REJECT --reject-with icmp-admin-prohibited
+    iptables -C FORWARD -s "\$DOCKER_NETS" -j "\$GUARD_CHAIN" 2>/dev/null || \
+        iptables -I FORWARD 1 -s "\$DOCKER_NETS" -j "\$GUARD_CHAIN"
+}
+
+remove_guard() {
+    while iptables -D FORWARD -s "\$DOCKER_NETS" -j "\$GUARD_CHAIN" 2>/dev/null; do :; done
+    iptables -F "\$GUARD_CHAIN" 2>/dev/null || true
+    iptables -X "\$GUARD_CHAIN" 2>/dev/null || true
+}
+
+if [ "\${1:-}" = "guard" ]; then
+    ensure_guard
+    ip route replace unreachable default metric "\$FAILSAFE_METRIC" table "\$TABLE_ID"
+    logger "warp-routing: fail-secure guard установлен."
+    exit 0
+fi
+
+if [ "\${1:-}" = "purge" ]; then
+    logger "warp-routing: Полное удаление project-owned routing/guard state..."
+    ip rule del fwmark 0x88 lookup main priority 40 2>/dev/null || true
+    ip rule del from "\$DOCKER_NETS" lookup "\$TABLE_ID" priority 100 2>/dev/null || true
+    ip route del default dev "\$PROXY_IF" table "\$TABLE_ID" 2>/dev/null || true
+    ip route del unreachable default metric "\$FAILSAFE_METRIC" table "\$TABLE_ID" 2>/dev/null || true
+    ip route del "\$FAKE_IP_RANGE" dev "\$PROXY_IF" 2>/dev/null || true
+    iptables -t mangle -D PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || true
+    iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || true
+    iptables -D FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
+    remove_guard
+    logger "warp-routing: Полное удаление project-owned state завершено."
+    exit 0
+fi
 
 if [ "\${1:-}" = "cleanup" ]; then
     logger "warp-routing: Выполняется очистка правил..."
     ip rule del fwmark 0x88 lookup main priority 40 2>/dev/null || true
     ip rule del from "\$DOCKER_NETS" lookup "\$TABLE_ID" priority 100 2>/dev/null || true
-    ip route del default table "\$TABLE_ID" 2>/dev/null || true
+    # Runtime stop/restart keeps fail-secure barriers in place.
+    ip route del default dev "\$PROXY_IF" table "\$TABLE_ID" 2>/dev/null || true
     ip route del "\$FAKE_IP_RANGE" dev "\$PROXY_IF" 2>/dev/null || true
     iptables -t mangle -D PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 2>/dev/null || true
     iptables -t mangle -D FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
@@ -257,6 +318,10 @@ if [ "\${1:-}" = "cleanup" ]; then
 fi
 
 logger "warp-routing: Запуск применения правил..."
+
+# Install barriers before waiting for TUN or deleting the source rule.
+ensure_guard
+ip route replace unreachable default metric "\$FAILSAFE_METRIC" table "\$TABLE_ID"
 
 for i in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "\$i"; done
 
@@ -290,7 +355,7 @@ iptables -D FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
 iptables -D FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || true
 
 # Маршруты в отдельную таблицу (main не трогаем — SSH в безопасности)
-ip route replace default dev "\$PROXY_IF" table "\$TABLE_ID"
+ip route replace default dev "\$PROXY_IF" metric 10 table "\$TABLE_ID"
 ip route replace "\$FAKE_IP_RANGE" dev "\$PROXY_IF"
 logger "warp-routing: Маршруты обновлены."
 
@@ -413,6 +478,10 @@ OnUnitActiveSec=1min
 WantedBy=timers.target
 EOF
 
+# 6. Перед рестартом Mihomo ставим независимый fail-secure barrier.
+echo -e "${YELLOW}[*] Установка fail-secure guard...${NC}"
+/usr/local/sbin/warp-docker-routing.sh guard
+
 # 6. Перезапуск Mihomo
 echo -e "${YELLOW}[*] Перезапуск Mihomo...${NC}"
 if systemctl list-unit-files | grep -q "^mihomo.service"; then
@@ -439,6 +508,7 @@ echo -e "  1. fake-ip-range: $FAKE_IP_RANGE"
 echo -e "  2. legacy top-level tun.inet4-address удалён"
 echo -e "  3. stack: gvisor (SSH безопасность)"
 echo -e "  4. auto-route: false"
+echo -e "     disable-icmp-forwarding: true (strict privacy)"
 echo -e "  5. mtu: 1420"
 echo -e "  6. gso: true"
 echo -e "  7. auto-detect-interface: true"
