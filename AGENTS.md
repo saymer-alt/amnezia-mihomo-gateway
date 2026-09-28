@@ -58,11 +58,13 @@ and regression tests for the generated watchdog logic (including named/numeric r
    checksum and docker0 gateway in `/var/lib/amnezia-mihomo-gateway`.
 6. Auto-patches the Mihomo config: searches for `config.yaml` in `/etc/mihomo /opt/mihomo /root /home`
    (maxdepth 3), creates backup `.bak.<epoch>`, stores the exact first pre-install config plus path/checksum metadata
-   in `/var/lib/amnezia-mihomo-gateway`, then applies the Mihomo 1.19.31 contract: `fake-ip-range: 198.18.0.0/16`,
-   removal of legacy top-level `tun.inet4-address` (per-proxy TUN listeners are preserved), `stack: gvisor`, `auto-route: false`,
-   `disable-icmp-forwarding: true`, `mtu: 1420`, `gso: true`, `auto-detect-interface: true`, `find-process-mode: off`,
-   `store-selected/store-fake-ip: false`, removal of `endpoint-independent-nat`. Every change
-   handles both "key exists" (sed) and "key absent" (awk insertion) — preserve both branches.
+   in `/var/lib/amnezia-mihomo-gateway`, then applies the Mihomo 1.19.31 contract only to the intended top-level
+   `dns`, `tun`, `profile`, `find-process-mode` and `endpoint-independent-nat` paths. Nested listener/proxy keys
+   are not rewritten. The patcher uses a same-directory temporary file, `flock`, preserves source metadata via
+   `cp --preserve=all`, optionally validates with local `mihomo -t -f`, then replaces the original with a same-filesystem
+   atomic rename. Ambiguous structures (duplicates, inline target mappings, unsupported indentation), symlinks and
+   multi-hardlink config files fail closed instead of being guessed. A missing `profile` section is created; exactly one
+   top-level `dns` and `tun` section is required.
 7. Generates `/usr/local/sbin/warp-docker-routing.sh`. Before touching the source rule it installs two independent
    fail-secure barriers: terminal `unreachable default metric 42760` in table 100 and the project-owned
    `AMG_FAILSECURE` FORWARD chain. The chain permits client traffic only through `tun-mihomo` or the already-marked
@@ -111,6 +113,9 @@ still does not perform automatic ownership-based rollback until its disposable-V
   an empty state would recreate the exposure window this protection is intended to close.
 - `resolv.conf`, systemd-resolved, `/etc/docker/daemon.json` are system-wide state not
   owned by this project; preserve the current behavior ("only if absent/active").
+- Mihomo config mutation must remain path-scoped and atomic. Never restore global `sed`/unscoped key replacement,
+  fixed `/tmp/mihomo_config.yaml` staging, or replacement that changes owner/group/mode. Comments are not keys;
+  nested listener/proxy fields must survive unchanged. Unsupported structures must fail before replacing the source file.
 - Source-side forwarding is owned by `AMG_FAILSECURE`; the legacy broad source `FORWARD ... ACCEPT` is removed. The reverse `-d <docker-subnet>` allowance remains for return traffic.
 - The watchdog restarts Mihomo once per minute if `tun-mihomo` is absent and restarts
   `warp-docker-routing.service` if rules disappear — check changes to this loop for
