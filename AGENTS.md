@@ -27,8 +27,8 @@ run ONLY on the target VPS, never on the development host.
 | `LICENSE` | MIT |
 
 The repository has lightweight GitHub Actions CI. CI deliberately does not emulate a real VPS, Docker, iptables, or live WARP:
-those still require deployment to a test VPS. Automated checks cover shell syntax, ShellCheck errors, and regression tests for
-the generated watchdog logic (including named/numeric routing-table aliases and self-heal behavior).
+those still require deployment to a test VPS. Automated checks cover shell syntax, ShellCheck errors, regression tests for the Mihomo config patch contract,
+and regression tests for the generated watchdog logic (including named/numeric routing-table aliases and self-heal behavior).
 
 ## Stack and available checks
 
@@ -55,8 +55,8 @@ the generated watchdog logic (including named/numeric routing-table aliases and 
 5. `/etc/docker/daemon.json` (DNS = docker0) — written ONLY if the file does not exist; an existing file is
    left untouched (Docker is restarted only in this branch).
 6. Auto-patches the Mihomo config: searches for `config.yaml` in `/etc/mihomo /opt/mihomo /root /home`
-   (maxdepth 3), creates backup `.bak.<epoch>`, then applies 9 sed/awk changes: `fake-ip-range: 198.18.0.0/16`,
-   `stack: gvisor`, `auto-route: false`, `mtu: 1420`,
+   (maxdepth 3), creates backup `.bak.<epoch>`, then applies 10 sed/awk changes: `fake-ip-range: 198.18.0.0/16`,
+   removal of legacy top-level `tun.inet4-address` (per-proxy TUN listeners are preserved), `stack: gvisor`, `auto-route: false`, `mtu: 1420`,
    `gso: true`, `auto-detect-interface: true`, `find-process-mode: off`,
    `store-selected/store-fake-ip: false`, removal of `endpoint-independent-nat`. Every change
    handles both "key exists" (sed) and "key absent" (awk insertion) — preserve both branches.
@@ -153,7 +153,7 @@ and existing sysctl/DNS values are not duplicated.
   changed only install.sh, while the templates are a snapshot from 2026-07-27. The template lacks the FAKE_IP_RANGE route,
   30-second interface wait, `txqueuelen 5000`, and logger messages. Synchronizing templates is
   a separate owner decision, not a "small fix".
-- Historical TUN examples used an explicit top-level `inet4-address`, but Mihomo 1.19.31 derives the effective top-level TUN IPv4 prefix from `dns.fake-ip-range`. Keep future docs/tests tied to the target Mihomo version and live interface evidence.
+- Historical TUN examples used an explicit top-level `inet4-address`, but Mihomo 1.19.31 derives the effective top-level TUN IPv4 prefix from `dns.fake-ip-range`. The installer now removes only the legacy top-level field while preserving per-proxy listener `inet4-address`. Keep future docs/tests tied to the target Mihomo version and live interface evidence.
 - `install.md` is headed with the old name "awg-warp-router".
 - `uninstall.sh` says "the server returned to standard settings", but in reality it does NOT
   restore systemd-resolved, leaves `/etc/resolv.conf` with the `+i` attribute, and leaves the
