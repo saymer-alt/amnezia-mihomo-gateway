@@ -417,8 +417,12 @@ TABLE_NAME="$TABLE_NAME"
 
 routing_ok() {
     ip link show "\$PROXY_IF" >/dev/null 2>&1 &&
-    ip rule show | grep -F "from \$DOCKER_NETS lookup " | grep -Eq "lookup (\$TABLE_ID|\$TABLE_NAME)( |\$)" &&
-    ip route show table "\$TABLE_ID" | grep -Fq "default dev \$PROXY_IF"
+    ip rule show | grep -Eq "^100:[[:space:]]+from \$DOCKER_NETS lookup (\$TABLE_ID|\$TABLE_NAME)( |\$)" &&
+    ip rule show | grep -Eq "^40:[[:space:]]+from all fwmark 0x88(/0xffffffff)? lookup main( |\$)" &&
+    ip route show table "\$TABLE_ID" | grep -Fq "default dev \$PROXY_IF" &&
+    ip route show table "\$TABLE_ID" | grep -Eq "^unreachable default .*metric 42760( |\$)" &&
+    iptables -C FORWARD -s "\$DOCKER_NETS" -j AMG_FAILSECURE >/dev/null 2>&1 &&
+    iptables -C AMG_FAILSECURE -s "\$DOCKER_NETS" -j REJECT --reject-with icmp-admin-prohibited >/dev/null 2>&1
 }
 
 if ! ip link show "\$PROXY_IF" >/dev/null 2>&1; then
