@@ -54,6 +54,12 @@ jobs:
           set -euo pipefail
           bash tests/test-fail-secure.sh
 
+      - name: Installer reconcile regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/test-installer-reconcile.sh
+
       - name: Watchdog regression tests
         shell: bash
         run: |
