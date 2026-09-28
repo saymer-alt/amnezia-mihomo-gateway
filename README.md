@@ -132,6 +132,7 @@ tun:
   device: tun-mihomo
   auto-route: false          # <-- СТРОГО false! Иначе отвалится SSH и скрипт конфликтует
   auto-detect-interface: true
+  disable-icmp-forwarding: true # strict privacy: не выпускать ICMP через host socket
 
 # --- DNS СЕКЦИЯ (рекомендуется) ---
 dns:
@@ -254,7 +255,7 @@ sudo ./uninstall.sh
 
 Это:
 - остановит и отключит routing/watchdog-сервисы;
-- вызовет `cleanup` и удалит созданные проектом `iptables`, `ip rule` и routing-table routes;
+- сначала остановит watchdog, затем routing service; обычный `cleanup` оставляет fail-secure guard, после чего uninstaller вызывает явный `purge` и удаляет project-owned `iptables`, `ip rule`, terminal route и routing-table routes;
 - удалит generated scripts, systemd units и `/etc/sysctl.d/99-amnezia-mihomo.conf`.
 
 **Важно: это не полный rollback сервера к состоянию до установки.** Текущий `uninstall.sh`
@@ -324,7 +325,8 @@ systemctl restart warp-docker-routing
 
 - **IPv6:** Скрипт настраивает только IPv4. Если у клиентов есть IPv6 и AWG его проксирует — трафик может уйти напрямую. Рекомендуется отключить IPv6 в конфиге AWG (`AllowedIPs = 0.0.0.0/0` без `::/0`).
 - **UFW/Firewalld:** Скрипт вставляет правила `FORWARD` в начало цепочки iptables, обходя `DROP` по умолчанию. Если используешь `nftables` — потребуется адаптация.
-- **Fail-secure:** Если `tun-mihomo` падает, трафик из Docker-сети не уходит в интернет напрямую (нет fallback-маршрута в `main` таблице). Клиенты останутся без интернета, но IP сервера не вылезет.
+- **Fail-secure:** защита строится в два слоя: в table 100 постоянно остаётся terminal `unreachable default`, а отдельная project-owned цепочка `AMG_FAILSECURE` разрешает клиентскому трафику только выход через `tun-mihomo` либо помеченный outer AWG reply path. Обычный restart/stop routing service оставляет эти барьеры включёнными; полный демонтаж выполняется только явным `purge` из uninstaller.
+- **ICMP privacy:** для Mihomo 1.19.31 installer выставляет `tun.disable-icmp-forwarding: true`. Без этого gVisor может создать host ICMP socket, который идёт в обход обычного TCP/UDP proxy rule matching. Ping клиента в этом режиме не следует использовать как доказательство реального WARP latency.
 
 ---
 
