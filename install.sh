@@ -167,76 +167,279 @@ if [ -n "$MIHOMO_CONFIG" ]; then
         printf '%s\n' "$MIHOMO_CONFIG" > "$STATE_DIR/mihomo_config_path"
     fi
 
-    # 1. fake-ip-range
-    sed -i -E "s|fake-ip-range:.*|fake-ip-range: $FAKE_IP_RANGE|g" "$MIHOMO_CONFIG"
-    # 2. Удаляем legacy top-level tun.inet4-address: в Mihomo 1.19.31
-    #    RawTun.Inet4Address не разбирается. Per-proxy listeners не трогаем.
-    awk '
-      /^tun:[[:space:]]*$/ { in_tun=1; print; next }
-      in_tun && /^[^#[:space:]]/ { in_tun=0 }
-      in_tun && /^[[:space:]]+inet4-address:[[:space:]]*/ { next }
-      { print }
-    ' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
-    # 3. stack: gvisor (жёстко)
-    if grep -q "^\s*stack:" "$MIHOMO_CONFIG"; then
-        sed -i -E "s|^([[:space:]]*)stack:.*|\1stack: gvisor|g" "$MIHOMO_CONFIG"
-    else
-        awk '/^tun:/{f=1} f&&/^[^#[:space:]]/{if(!done){print "  stack: gvisor"; done=1}} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
-    fi
-    # 4. auto-route: false
-    awk '/^tun:/{f=1} f&&/auto-route:/{sub(/auto-route:.*/, "auto-route: false"); f=0} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
+    # BEGIN MIHOMO_CONFIG_PATCH
+    # Scope-aware patcher for the top-level dns/tun/profile mappings.
+    # Unsupported/ambiguous YAML structures fail closed instead of being guessed.
+    patch_mihomo_config() {
+        local config="$1"
+        local config_dir config_base hardlinks lock_file
 
-    # 4a. Strict privacy: Mihomo 1.19.31 gVisor can otherwise create a host ICMP socket
-    #     that bypasses normal TCP/UDP proxy rule matching.
-    awk '
-      /^tun:[[:space:]]*$/ { in_tun=1; seen=0; print; next }
-      in_tun && /^[^#[:space:]]/ {
-        if (!seen) print "  disable-icmp-forwarding: true"
-        in_tun=0
-      }
-      in_tun && /^[[:space:]]+disable-icmp-forwarding:[[:space:]]*/ {
-        print "  disable-icmp-forwarding: true"
-        seen=1
-        next
-      }
-      { print }
-      END { if (in_tun && !seen) print "  disable-icmp-forwarding: true" }
-    ' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
-    # 5. mtu: 1420
-    if grep -q "^\s*mtu:" "$MIHOMO_CONFIG"; then
-        sed -i -E "s|^([[:space:]]*)mtu:.*|\1mtu: 1420|g" "$MIHOMO_CONFIG"
-    else
-        awk '/^tun:/{f=1} f&&/^[^#[:space:]]/{if(!done){print "  mtu: 1420"; done=1}} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
-    fi
-    # 6. gso: true
-    if grep -q "^\s*gso:" "$MIHOMO_CONFIG"; then
-        sed -i -E "s|^([[:space:]]*)gso:.*|\1gso: true|g" "$MIHOMO_CONFIG"
-    else
-        awk '/^tun:/{f=1} f&&/^[^#[:space:]]/{if(!done){print "  gso: true"; done=1}} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
-    fi
-    # 7. auto-detect-interface: true (критично для upload)
-    if grep -q "^\s*auto-detect-interface:" "$MIHOMO_CONFIG"; then
-        sed -i -E "s|^([[:space:]]*)auto-detect-interface:.*|\1auto-detect-interface: true|g" "$MIHOMO_CONFIG"
-    fi
-    # 8. find-process-mode: off (в корне, не в tun)
-    if grep -q "^find-process-mode:" "$MIHOMO_CONFIG"; then
-        sed -i 's|^find-process-mode:.*|find-process-mode: off|g' "$MIHOMO_CONFIG"
-    else
-        if grep -q "^tun:" "$MIHOMO_CONFIG"; then
-            sed -i '/^tun:/i find-process-mode: off\n' "$MIHOMO_CONFIG"
-        else
-            echo -e "\nfind-process-mode: off" >> "$MIHOMO_CONFIG"
+        config_dir=$(dirname -- "$config")
+        config_base=$(basename -- "$config")
+        lock_file="$config.amg.lock"
+
+        if [ -L "$config" ]; then
+            echo -e "\${RED}Ошибка: config.yaml является symlink; безопасный atomic replace не выполняется.\${NC}" >&2
+            return 1
         fi
-    fi
-    # 9. profile: store-selected/store-fake-ip false
-    if grep -q "^profile:" "$MIHOMO_CONFIG"; then
-        sed -i 's|store-selected:.*|store-selected: false|g' "$MIHOMO_CONFIG"
-        sed -i 's|store-fake-ip:.*|store-fake-ip: false|g' "$MIHOMO_CONFIG"
-    else
-        echo -e "\nprofile:\n  store-selected: false\n  store-fake-ip: false" >> "$MIHOMO_CONFIG"
-    fi
-    # 10. Убираем endpoint-independent-nat, если был (ломает gvisor)
-    sed -i '/endpoint-independent-nat/d' "$MIHOMO_CONFIG"
+
+        hardlinks=$(stat -c '%h' -- "$config")
+        if [ "$hardlinks" -ne 1 ]; then
+            echo -e "\${RED}Ошибка: config.yaml имеет $hardlinks hardlink(s); atomic replace изменил бы семантику файла.\${NC}" >&2
+            return 1
+        fi
+
+        if ! command -v flock >/dev/null 2>&1; then
+            echo -e "\${RED}Ошибка: для безопасного патча требуется flock (util-linux).\${NC}" >&2
+            return 1
+        fi
+
+        (
+            local body tmp
+            exec 9>"$lock_file"
+            if ! flock -n 9; then
+                echo -e "\${RED}Ошибка: config.yaml уже изменяется другим процессом.\${NC}" >&2
+                exit 1
+            fi
+
+            body=$(mktemp "$config_dir/.\${config_base}.amg.body.XXXXXX")
+            tmp=$(mktemp "$config_dir/.\${config_base}.amg.XXXXXX")
+            trap 'rm -f -- "$body" "$tmp"' EXIT HUP INT TERM
+
+            if ! awk -v fake="$FAKE_IP_RANGE" '
+              function fail(msg) {
+                  print "amg-patcher: " msg > "/dev/stderr"
+                  bad=1
+              }
+              function reset_seen() {
+                  seen_fake=seen_stack=seen_autoroute=seen_icmp=seen_mtu=seen_gso=seen_autodetect=0
+                  seen_store_selected=seen_store_fake=0
+                  indent_checked=0
+                  skip_inet4=0
+              }
+              function emit_missing(which) {
+                  if (which == "dns") {
+                      if (!seen_fake) print "  fake-ip-range: " fake
+                  } else if (which == "tun") {
+                      if (!seen_stack) print "  stack: gvisor"
+                      if (!seen_autoroute) print "  auto-route: false"
+                      if (!seen_icmp) print "  disable-icmp-forwarding: true"
+                      if (!seen_mtu) print "  mtu: 1420"
+                      if (!seen_gso) print "  gso: true"
+                      if (!seen_autodetect) print "  auto-detect-interface: true"
+                  } else if (which == "profile") {
+                      if (!seen_store_selected) print "  store-selected: false"
+                      if (!seen_store_fake) print "  store-fake-ip: false"
+                  }
+              }
+              function close_section() {
+                  if (section != "") emit_missing(section)
+                  section=""
+              }
+              function check_direct_indent(line, n) {
+                  if (indent_checked || line ~ /^[[:space:]]*($|#)/) return
+                  if (line ~ /^\t/) {
+                      fail("tabs inside top-level " section " mapping are unsupported")
+                      indent_checked=1
+                      return
+                  }
+                  if (match(line, /^ +[^ #]/)) {
+                      n=RLENGTH-1
+                      if (n != 2) fail("top-level " section " mapping must use two-space direct-child indentation")
+                      indent_checked=1
+                  }
+              }
+              BEGIN {
+                  section=""
+                  bad=0
+                  dns_sections=tun_sections=profile_sections=find_count=0
+                  reset_seen()
+              }
+              {
+                  line=$0
+
+                  if (line ~ /^dns:/ && line !~ /^dns:[[:space:]]*(#.*)?$/) {
+                      fail("inline/anchored top-level dns mapping is unsupported")
+                  }
+                  if (line ~ /^tun:/ && line !~ /^tun:[[:space:]]*(#.*)?$/) {
+                      fail("inline/anchored top-level tun mapping is unsupported")
+                  }
+                  if (line ~ /^profile:/ && line !~ /^profile:[[:space:]]*(#.*)?$/) {
+                      fail("inline/anchored top-level profile mapping is unsupported")
+                  }
+
+                  if (line ~ /^dns:[[:space:]]*(#.*)?$/) {
+                      close_section()
+                      dns_sections++
+                      if (dns_sections > 1) fail("duplicate top-level dns section")
+                      section="dns"
+                      reset_seen()
+                      print
+                      next
+                  }
+                  if (line ~ /^tun:[[:space:]]*(#.*)?$/) {
+                      close_section()
+                      tun_sections++
+                      if (tun_sections > 1) fail("duplicate top-level tun section")
+                      section="tun"
+                      reset_seen()
+                      print
+                      next
+                  }
+                  if (line ~ /^profile:[[:space:]]*(#.*)?$/) {
+                      close_section()
+                      profile_sections++
+                      if (profile_sections > 1) fail("duplicate top-level profile section")
+                      section="profile"
+                      reset_seen()
+                      print
+                      next
+                  }
+
+                  if (section != "" && line ~ /^[^[:space:]#][^:]*:/) {
+                      close_section()
+                  }
+
+                  if (section == "") {
+                      if (line ~ /^find-process-mode:[[:space:]]*/) {
+                          find_count++
+                          if (find_count > 1) fail("duplicate top-level find-process-mode")
+                          print "find-process-mode: off"
+                          next
+                      }
+                      if (line ~ /^endpoint-independent-nat:[[:space:]]*/) {
+                          next
+                      }
+                      print
+                      next
+                  }
+
+                  check_direct_indent(line)
+
+                  if (section == "dns") {
+                      if (line ~ /^  fake-ip-range:[[:space:]]*/) {
+                          seen_fake++
+                          if (seen_fake > 1) fail("duplicate dns.fake-ip-range")
+                          print "  fake-ip-range: " fake
+                          next
+                      }
+                      print
+                      next
+                  }
+
+                  if (section == "tun") {
+                      if (skip_inet4) {
+                          if (line ~ /^    / || line ~ /^  -[[:space:]]/) next
+                          skip_inet4=0
+                      }
+                      if (line ~ /^  inet4-address:[[:space:]]*/) {
+                          skip_inet4=1
+                          next
+                      }
+                      if (line ~ /^  stack:[[:space:]]*/) {
+                          seen_stack++
+                          if (seen_stack > 1) fail("duplicate tun.stack")
+                          print "  stack: gvisor"
+                          next
+                      }
+                      if (line ~ /^  auto-route:[[:space:]]*/) {
+                          seen_autoroute++
+                          if (seen_autoroute > 1) fail("duplicate tun.auto-route")
+                          print "  auto-route: false"
+                          next
+                      }
+                      if (line ~ /^  disable-icmp-forwarding:[[:space:]]*/) {
+                          seen_icmp++
+                          if (seen_icmp > 1) fail("duplicate tun.disable-icmp-forwarding")
+                          print "  disable-icmp-forwarding: true"
+                          next
+                      }
+                      if (line ~ /^  mtu:[[:space:]]*/) {
+                          seen_mtu++
+                          if (seen_mtu > 1) fail("duplicate tun.mtu")
+                          print "  mtu: 1420"
+                          next
+                      }
+                      if (line ~ /^  gso:[[:space:]]*/) {
+                          seen_gso++
+                          if (seen_gso > 1) fail("duplicate tun.gso")
+                          print "  gso: true"
+                          next
+                      }
+                      if (line ~ /^  auto-detect-interface:[[:space:]]*/) {
+                          seen_autodetect++
+                          if (seen_autodetect > 1) fail("duplicate tun.auto-detect-interface")
+                          print "  auto-detect-interface: true"
+                          next
+                      }
+                      print
+                      next
+                  }
+
+                  if (section == "profile") {
+                      if (line ~ /^  store-selected:[[:space:]]*/) {
+                          seen_store_selected++
+                          if (seen_store_selected > 1) fail("duplicate profile.store-selected")
+                          print "  store-selected: false"
+                          next
+                      }
+                      if (line ~ /^  store-fake-ip:[[:space:]]*/) {
+                          seen_store_fake++
+                          if (seen_store_fake > 1) fail("duplicate profile.store-fake-ip")
+                          print "  store-fake-ip: false"
+                          next
+                      }
+                      print
+                      next
+                  }
+              }
+              END {
+                  close_section()
+
+                  if (dns_sections != 1) fail("exactly one top-level dns section is required")
+                  if (tun_sections != 1) fail("exactly one top-level tun section is required")
+
+                  if (find_count == 0) print "find-process-mode: off"
+
+                  if (profile_sections == 0) {
+                      print ""
+                      print "profile:"
+                      print "  store-selected: false"
+                      print "  store-fake-ip: false"
+                  }
+
+                  if (bad) exit 42
+              }
+            ' "$config" > "$body"; then
+                echo -e "\${RED}Ошибка: структура config.yaml неоднозначна или не поддерживается; исходный файл не изменён.\${NC}" >&2
+                exit 1
+            fi
+
+            # Preserve owner/group/mode/ACL/xattrs on the replacement inode.
+            cp --preserve=all -- "$config" "$tmp"
+            cat -- "$body" > "$tmp"
+
+            if command -v mihomo >/dev/null 2>&1; then
+                if ! mihomo -t -f "$tmp"; then
+                    echo -e "\${RED}Ошибка: mihomo -t отклонил пропатченный config.yaml; исходный файл не изменён.\${NC}" >&2
+                    exit 1
+                fi
+                echo -e "\${CYAN}    -> mihomo -t: PASS.\${NC}"
+            else
+                echo -e "\${YELLOW}    -> WARN: локальный бинарник mihomo не найден; syntax validation будет выполнена на live acceptance.\${NC}"
+            fi
+
+            # Same-directory rename is atomic on the target filesystem.
+            mv -f -- "$tmp" "$config"
+            tmp=""
+            rm -f -- "$body"
+            body=""
+            trap - EXIT HUP INT TERM
+        )
+    }
+
+    patch_mihomo_config "$MIHOMO_CONFIG"
+    # END MIHOMO_CONFIG_PATCH
 
     sha256sum "$MIHOMO_CONFIG" | awk '{print $1}' > "$STATE_DIR/mihomo_patched_sha256"
     echo -e "${GREEN}    Патчи применены: stack: gvisor, auto-route: false, mtu: 1420, gso: true, find-process-mode: off, store-*: false${NC}"
