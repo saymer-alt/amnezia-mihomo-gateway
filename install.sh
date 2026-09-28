@@ -61,7 +61,6 @@ PROXY_IF="tun-mihomo"
 TABLE_ID="100"
 TABLE_NAME="mihomo"
 FAKE_IP_RANGE="198.18.0.0/16"
-TUN_INET_ADDR="10.255.255.1/30"
 
 echo -e "${GREEN}Настройки определены:${NC}"
 echo -e " - Сеть Docker: $DOCKER_NETS"
@@ -143,33 +142,31 @@ if [ -n "$MIHOMO_CONFIG" ]; then
 
     # 1. fake-ip-range
     sed -i -E "s|fake-ip-range:.*|fake-ip-range: $FAKE_IP_RANGE|g" "$MIHOMO_CONFIG"
-    # 2. inet4-address
-    sed -i -E "s|inet4-address:.*|inet4-address: $TUN_INET_ADDR|g" "$MIHOMO_CONFIG"
-    # 3. stack: gvisor (жёстко)
+    # 2. stack: gvisor (жёстко)
     if grep -q "^\s*stack:" "$MIHOMO_CONFIG"; then
         sed -i -E "s|^([[:space:]]*)stack:.*|\1stack: gvisor|g" "$MIHOMO_CONFIG"
     else
         awk '/^tun:/{f=1} f&&/^[^#[:space:]]/{if(!done){print "  stack: gvisor"; done=1}} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
     fi
-    # 4. auto-route: false
+    # 3. auto-route: false
     awk '/^tun:/{f=1} f&&/auto-route:/{sub(/auto-route:.*/, "auto-route: false"); f=0} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
-    # 5. mtu: 1420
+    # 4. mtu: 1420
     if grep -q "^\s*mtu:" "$MIHOMO_CONFIG"; then
         sed -i -E "s|^([[:space:]]*)mtu:.*|\1mtu: 1420|g" "$MIHOMO_CONFIG"
     else
         awk '/^tun:/{f=1} f&&/^[^#[:space:]]/{if(!done){print "  mtu: 1420"; done=1}} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
     fi
-    # 6. gso: true
+    # 5. gso: true
     if grep -q "^\s*gso:" "$MIHOMO_CONFIG"; then
         sed -i -E "s|^([[:space:]]*)gso:.*|\1gso: true|g" "$MIHOMO_CONFIG"
     else
         awk '/^tun:/{f=1} f&&/^[^#[:space:]]/{if(!done){print "  gso: true"; done=1}} {print}' "$MIHOMO_CONFIG" > /tmp/mihomo_config.yaml && mv /tmp/mihomo_config.yaml "$MIHOMO_CONFIG"
     fi
-    # 7. auto-detect-interface: true (критично для upload)
+    # 6. auto-detect-interface: true (критично для upload)
     if grep -q "^\s*auto-detect-interface:" "$MIHOMO_CONFIG"; then
         sed -i -E "s|^([[:space:]]*)auto-detect-interface:.*|\1auto-detect-interface: true|g" "$MIHOMO_CONFIG"
     fi
-    # 8. find-process-mode: off (в корне, не в tun)
+    # 7. find-process-mode: off (в корне, не в tun)
     if grep -q "^find-process-mode:" "$MIHOMO_CONFIG"; then
         sed -i 's|^find-process-mode:.*|find-process-mode: off|g' "$MIHOMO_CONFIG"
     else
@@ -179,14 +176,14 @@ if [ -n "$MIHOMO_CONFIG" ]; then
             echo -e "\nfind-process-mode: off" >> "$MIHOMO_CONFIG"
         fi
     fi
-    # 9. profile: store-selected/store-fake-ip false
+    # 8. profile: store-selected/store-fake-ip false
     if grep -q "^profile:" "$MIHOMO_CONFIG"; then
         sed -i 's|store-selected:.*|store-selected: false|g' "$MIHOMO_CONFIG"
         sed -i 's|store-fake-ip:.*|store-fake-ip: false|g' "$MIHOMO_CONFIG"
     else
         echo -e "\nprofile:\n  store-selected: false\n  store-fake-ip: false" >> "$MIHOMO_CONFIG"
     fi
-    # 10. Убираем endpoint-independent-nat, если был (ломает gvisor)
+    # 9. Убираем endpoint-independent-nat, если был (ломает gvisor)
     sed -i '/endpoint-independent-nat/d' "$MIHOMO_CONFIG"
 
     echo -e "${GREEN}    Патчи применены: stack: gvisor, auto-route: false, mtu: 1420, gso: true, find-process-mode: off, store-*: false${NC}"
@@ -402,15 +399,14 @@ echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Верс
 echo -e "${GREEN}========================================================${NC}"
 echo -e "${YELLOW}Скрипт автоматически пропатчил config.yaml Mihomo:${NC}"
 echo -e "  1. fake-ip-range: $FAKE_IP_RANGE"
-echo -e "  2. inet4-address: $TUN_INET_ADDR"
-echo -e "  3. stack: gvisor (SSH безопасность)"
+echo -e "  2. stack: gvisor (SSH безопасность)"
 echo -e "  4. auto-route: false"
 echo -e "  5. mtu: 1420"
 echo -e "  6. gso: true"
 echo -e "  7. find-process-mode: off"
 echo -e "  8. store-selected: false, store-fake-ip: false"
 echo -e "  9. TCPMSS --clamp-mss-to-pmtu (проверено: +~2x скорость)"
-echo -e "  10. endpoint-independent-nat удалён (ломает gvisor)"
+echo -e "  9. endpoint-independent-nat удалён (ломает gvisor)"
 echo ""
 echo -e "${CYAN}Проверка: запустите спидтест с клиента.${NC}"
 echo -e "${CYAN}Ожидаемая скорость: 35-45 / 70-90+ Мбит на 2-core VPS${NC}"
