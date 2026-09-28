@@ -706,7 +706,12 @@ sleep 5
 # 7. Запуск маршрутизации
 echo -e "${YELLOW}[*] Перезагрузка systemd и запуск...${NC}"
 systemctl daemon-reload
-systemctl enable --now warp-docker-routing.service
+# A oneshot + RemainAfterExit service can already be active from a previous
+# installation. enable --now does not re-run ExecStart in that state, so
+# explicitly reconcile the freshly generated script/unit now. ExecStop cleanup
+# keeps AMG_FAILSECURE + the terminal unreachable route in place during restart.
+systemctl enable warp-docker-routing.service
+systemctl restart warp-docker-routing.service
 systemctl enable --now check-warp-routing.timer
 
 echo -e "${GREEN}========================================================${NC}"
