@@ -179,18 +179,18 @@ if [ -n "$MIHOMO_CONFIG" ]; then
         lock_file="$config.amg.lock"
 
         if [ -L "$config" ]; then
-            echo -e "\${RED}Ошибка: config.yaml является symlink; безопасный atomic replace не выполняется.\${NC}" >&2
+            echo -e "${RED}Ошибка: config.yaml является symlink; безопасный atomic replace не выполняется.${NC}" >&2
             return 1
         fi
 
         hardlinks=$(stat -c '%h' -- "$config")
         if [ "$hardlinks" -ne 1 ]; then
-            echo -e "\${RED}Ошибка: config.yaml имеет $hardlinks hardlink(s); atomic replace изменил бы семантику файла.\${NC}" >&2
+            echo -e "${RED}Ошибка: config.yaml имеет $hardlinks hardlink(s); atomic replace изменил бы семантику файла.${NC}" >&2
             return 1
         fi
 
         if ! command -v flock >/dev/null 2>&1; then
-            echo -e "\${RED}Ошибка: для безопасного патча требуется flock (util-linux).\${NC}" >&2
+            echo -e "${RED}Ошибка: для безопасного патча требуется flock (util-linux).${NC}" >&2
             return 1
         fi
 
@@ -198,12 +198,12 @@ if [ -n "$MIHOMO_CONFIG" ]; then
             local body tmp
             exec 9>"$lock_file"
             if ! flock -n 9; then
-                echo -e "\${RED}Ошибка: config.yaml уже изменяется другим процессом.\${NC}" >&2
+                echo -e "${RED}Ошибка: config.yaml уже изменяется другим процессом.${NC}" >&2
                 exit 1
             fi
 
-            body=$(mktemp "$config_dir/.\${config_base}.amg.body.XXXXXX")
-            tmp=$(mktemp "$config_dir/.\${config_base}.amg.XXXXXX")
+            body=$(mktemp "$config_dir/.${config_base}.amg.body.XXXXXX")
+            tmp=$(mktemp "$config_dir/.${config_base}.amg.XXXXXX")
             trap 'rm -f -- "$body" "$tmp"' EXIT HUP INT TERM
 
             if ! awk -v fake="$FAKE_IP_RANGE" '
@@ -411,7 +411,7 @@ if [ -n "$MIHOMO_CONFIG" ]; then
                   if (bad) exit 42
               }
             ' "$config" > "$body"; then
-                echo -e "\${RED}Ошибка: структура config.yaml неоднозначна или не поддерживается; исходный файл не изменён.\${NC}" >&2
+                echo -e "${RED}Ошибка: структура config.yaml неоднозначна или не поддерживается; исходный файл не изменён.${NC}" >&2
                 exit 1
             fi
 
@@ -421,12 +421,12 @@ if [ -n "$MIHOMO_CONFIG" ]; then
 
             if command -v mihomo >/dev/null 2>&1; then
                 if ! mihomo -t -f "$tmp"; then
-                    echo -e "\${RED}Ошибка: mihomo -t отклонил пропатченный config.yaml; исходный файл не изменён.\${NC}" >&2
+                    echo -e "${RED}Ошибка: mihomo -t отклонил пропатченный config.yaml; исходный файл не изменён.${NC}" >&2
                     exit 1
                 fi
-                echo -e "\${CYAN}    -> mihomo -t: PASS.\${NC}"
+                echo -e "${CYAN}    -> mihomo -t: PASS.${NC}"
             else
-                echo -e "\${YELLOW}    -> WARN: локальный бинарник mihomo не найден; syntax validation будет выполнена на live acceptance.\${NC}"
+                echo -e "${YELLOW}    -> WARN: локальный бинарник mihomo не найден; syntax validation будет выполнена на live acceptance.${NC}"
             fi
 
             # Same-directory rename is atomic on the target filesystem.
