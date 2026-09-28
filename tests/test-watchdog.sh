@@ -46,14 +46,17 @@ case "$*" in
     case "${TEST_MODE:?}" in
       named)
         echo "0: from all lookup local"
+        echo "40: from all fwmark 0x88 lookup main"
         echo "100: from 172.29.172.0/24 lookup mihomo"
         ;;
       numeric)
         echo "0: from all lookup local"
+        echo "40: from all fwmark 0x88 lookup main"
         echo "100: from 172.29.172.0/24 lookup 100"
         ;;
       heal-success)
         if [[ -f "${STATE_FILE:?}" ]]; then
+          echo "40: from all fwmark 0x88 lookup main"
           echo "100: from 172.29.172.0/24 lookup mihomo"
         fi
         ;;
@@ -67,7 +70,8 @@ case "$*" in
     exit 0
     ;;
   "route show table 100")
-    echo "default dev tun-mihomo scope link"
+    echo "default dev tun-mihomo scope link metric 10"
+    echo "unreachable default metric 42760"
     exit 0
     ;;
 esac
@@ -91,12 +95,27 @@ echo "unexpected systemctl invocation: $*" >&2
 exit 2
 EOF
 
+cat > "$MOCK_BIN/iptables" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "-C FORWARD -s 172.29.172.0/24 -j AMG_FAILSECURE")
+    exit 0
+    ;;
+  "-C AMG_FAILSECURE -s 172.29.172.0/24 -j REJECT --reject-with icmp-admin-prohibited")
+    exit 0
+    ;;
+esac
+echo "unexpected iptables invocation: $*" >&2
+exit 2
+EOF
+
 cat > "$MOCK_BIN/logger" <<'EOF'
 #!/usr/bin/env sh
 exit 0
 EOF
 
-chmod +x "$MOCK_BIN/ip" "$MOCK_BIN/systemctl" "$MOCK_BIN/logger"
+chmod +x "$MOCK_BIN/ip" "$MOCK_BIN/systemctl" "$MOCK_BIN/iptables" "$MOCK_BIN/logger"
 
 run_expect_success() {
   local mode="$1"
