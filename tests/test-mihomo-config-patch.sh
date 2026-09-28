@@ -81,7 +81,64 @@ assert_absent() {
 
 assert_line '^[[:space:]]+fake-ip-range:[[:space:]]+198\.18\.0\.0/16$' 'fake-ip-range was not normalized'
 assert_line '^[[:space:]]+stack:[[:space:]]+gvisor$' 'stack was not normalized to gvisor'
-assert_line '^[[:space:]]+auto-route:[[:space:]]+false$' 'auto-route was not disabled'
+assert_line '^[[:space:]]+auto-route:[[:space:]]+falseassert_line '^[[:space:]]+auto-detect-interface:[[:space:]]+true$' 'auto-detect-interface was not enabled'
+assert_line '^[[:space:]]+mtu:[[:space:]]+1420$' 'MTU was not normalized'
+assert_line '^[[:space:]]+gso:[[:space:]]+true$' 'GSO was not enabled'
+assert_line '^find-process-mode:[[:space:]]+off$' 'find-process-mode was not disabled'
+assert_line '^[[:space:]]+store-selected:[[:space:]]+false$' 'store-selected was not disabled'
+assert_line '^[[:space:]]+store-fake-ip:[[:space:]]+false$' 'store-fake-ip was not disabled'
+assert_absent '^endpoint-independent-nat:' 'endpoint-independent-nat was not removed'
+
+# Mihomo 1.19.31 ignores top-level RawTun.Inet4Address, so legacy desired-state
+# must disappear from the top-level tun block.
+top_tun="$TMP_DIR/top-tun.txt"
+awk '
+  /^tun:[[:space:]]*$/ { in_tun=1; next }
+  in_tun && /^[^#[:space:]]/ { exit }
+  in_tun { print }
+' "$CONFIG" > "$top_tun"
+if grep -Eq '^[[:space:]]+inet4-address:' "$top_tun"; then
+  echo "FAIL: legacy top-level tun.inet4-address survived installer patch" >&2
+  cat "$CONFIG" >&2
+  exit 1
+fi
+
+# Per-proxy TUN listener uses a different Mihomo config path where inet4-address
+# is supported and must remain untouched.
+assert_line '^[[:space:]]+inet4-address:$' 'per-proxy listener inet4-address key was removed'
+assert_line '^[[:space:]]+-[[:space:]]+198\.19\.0\.1/30$' 'per-proxy listener inet4-address value was removed'
+
+echo "PASS: Mihomo config patch matches the 1.19.31 TUN address contract."
+ 'auto-route was not disabled'
+assert_line '^[[:space:]]+disable-icmp-forwarding:[[:space:]]+trueassert_line '^[[:space:]]+auto-detect-interface:[[:space:]]+true$' 'auto-detect-interface was not enabled'
+assert_line '^[[:space:]]+mtu:[[:space:]]+1420$' 'MTU was not normalized'
+assert_line '^[[:space:]]+gso:[[:space:]]+true$' 'GSO was not enabled'
+assert_line '^find-process-mode:[[:space:]]+off$' 'find-process-mode was not disabled'
+assert_line '^[[:space:]]+store-selected:[[:space:]]+false$' 'store-selected was not disabled'
+assert_line '^[[:space:]]+store-fake-ip:[[:space:]]+false$' 'store-fake-ip was not disabled'
+assert_absent '^endpoint-independent-nat:' 'endpoint-independent-nat was not removed'
+
+# Mihomo 1.19.31 ignores top-level RawTun.Inet4Address, so legacy desired-state
+# must disappear from the top-level tun block.
+top_tun="$TMP_DIR/top-tun.txt"
+awk '
+  /^tun:[[:space:]]*$/ { in_tun=1; next }
+  in_tun && /^[^#[:space:]]/ { exit }
+  in_tun { print }
+' "$CONFIG" > "$top_tun"
+if grep -Eq '^[[:space:]]+inet4-address:' "$top_tun"; then
+  echo "FAIL: legacy top-level tun.inet4-address survived installer patch" >&2
+  cat "$CONFIG" >&2
+  exit 1
+fi
+
+# Per-proxy TUN listener uses a different Mihomo config path where inet4-address
+# is supported and must remain untouched.
+assert_line '^[[:space:]]+inet4-address:$' 'per-proxy listener inet4-address key was removed'
+assert_line '^[[:space:]]+-[[:space:]]+198\.19\.0\.1/30$' 'per-proxy listener inet4-address value was removed'
+
+echo "PASS: Mihomo config patch matches the 1.19.31 TUN address contract."
+ 'ICMP forwarding was not disabled for strict privacy'
 assert_line '^[[:space:]]+auto-detect-interface:[[:space:]]+true$' 'auto-detect-interface was not enabled'
 assert_line '^[[:space:]]+mtu:[[:space:]]+1420$' 'MTU was not normalized'
 assert_line '^[[:space:]]+gso:[[:space:]]+true$' 'GSO was not enabled'
