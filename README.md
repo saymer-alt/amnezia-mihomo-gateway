@@ -64,6 +64,7 @@
 | `check-warp-routing.sh` | Watchdog: проверяет наличие tun-интерфейса и правил раз в минуту |
 | `warp-docker-routing.service` | Systemd unit для маршрутизации |
 | `check-warp-routing.timer` | Systemd timer для watchdog |
+| `docs/LIVE_AUDIT_2026-09-23.md` | Live-аудит: подтверждённые VPS-наблюдения, ownership-state и release gates |
 
 ---
 
@@ -266,8 +267,16 @@ sudo ./uninstall.sh
 - `/etc/docker/daemon.json`, если installer создал его;
 - автоматически пропатченный `config.yaml` Mihomo.
 
-Перед patch `config.yaml` installer создаёт backup `.bak.<timestamp>`, но выбор и
-восстановление нужного backup остаются ручной операцией.
+Перед patch `config.yaml` installer создаёт backup `.bak.<timestamp>`.
+
+Installer также сохраняет ownership/pre-install state в
+`/var/lib/amnezia-mihomo-gateway`: кто добавил `100 mihomo`, создавался ли проектом
+`/etc/docker/daemon.json`, его checksum, а также точный исходный Mihomo `config.yaml` и checksum
+пропатченной версии. Текущий `uninstall.sh` пока не использует эти данные автоматически —
+они нужны для будущего безопасного rollback без угадывания и удаления чужих настроек.
+
+Подробный live-аудит и release gates:
+[docs/LIVE_AUDIT_2026-09-23.md](docs/LIVE_AUDIT_2026-09-23.md).
 
 ---
 
