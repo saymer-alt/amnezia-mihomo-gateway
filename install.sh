@@ -263,10 +263,12 @@ FAILSAFE_METRIC="42760"
 ensure_guard() {
     # Independent barrier: AWG client traffic may use only TUN or the marked outer AWG reply path.
     iptables -N "\$GUARD_CHAIN" 2>/dev/null || true
-    iptables -F "\$GUARD_CHAIN"
-    iptables -A "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -o "\$PROXY_IF" -j ACCEPT
-    iptables -A "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -m mark --mark 0x88 -o "\$HOST_IF" -j ACCEPT
-    iptables -A "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -j REJECT --reject-with icmp-admin-prohibited
+    iptables -C "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -o "\$PROXY_IF" -j ACCEPT 2>/dev/null || \
+        iptables -A "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -o "\$PROXY_IF" -j ACCEPT
+    iptables -C "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -m mark --mark 0x88 -o "\$HOST_IF" -j ACCEPT 2>/dev/null || \
+        iptables -A "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -m mark --mark 0x88 -o "\$HOST_IF" -j ACCEPT
+    iptables -C "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -j REJECT --reject-with icmp-admin-prohibited 2>/dev/null || \
+        iptables -A "\$GUARD_CHAIN" -s "\$DOCKER_NETS" -j REJECT --reject-with icmp-admin-prohibited
     iptables -C FORWARD -s "\$DOCKER_NETS" -j "\$GUARD_CHAIN" 2>/dev/null || \
         iptables -I FORWARD 1 -s "\$DOCKER_NETS" -j "\$GUARD_CHAIN"
 }
@@ -374,9 +376,9 @@ iptables -t mangle -A FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-fl
 iptables -t nat -C POSTROUTING -o "\$PROXY_IF" -j MASQUERADE 2>/dev/null || \\
 iptables -t nat -A POSTROUTING -o "\$PROXY_IF" -j MASQUERADE
 
-# Форвардинг
-iptables -C FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || \\
-iptables -I FORWARD 1 -s "\$DOCKER_NETS" -j ACCEPT
+# Форвардинг: source-side allow теперь принадлежит AMG_FAILSECURE.
+# Удаляем legacy broad ACCEPT, чтобы он не мог обойти guard.
+while iptables -D FORWARD -s "\$DOCKER_NETS" -j ACCEPT 2>/dev/null; do :; done
 
 iptables -C FORWARD -d "\$DOCKER_NETS" -j ACCEPT 2>/dev/null || \\
 iptables -I FORWARD 2 -d "\$DOCKER_NETS" -j ACCEPT
