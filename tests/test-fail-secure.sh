@@ -40,7 +40,12 @@ EOF
 cat > "$MOCK_BIN/iptables" <<'EOF'
 #!/usr/bin/env bash
 printf 'iptables %s\n' "$*" >> "${CALL_LOG:?}"
-if [[ "$*" == "-C FORWARD -s 172.29.172.0/24 -j AMG_FAILSECURE" ]]; then
+# Pretend checks miss on first creation so the generated script exercises -A/-I.
+if [[ "${1:-}" == "-C" ]]; then
+  exit 1
+fi
+# remove_guard uses a while loop; report that no duplicate hook remains.
+if [[ "$*" == "-D FORWARD -s 172.29.172.0/24 -j AMG_FAILSECURE" ]]; then
   exit 1
 fi
 exit 0
