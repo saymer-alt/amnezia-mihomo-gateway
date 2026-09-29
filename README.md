@@ -59,7 +59,7 @@
 | Файл | Назначение |
 |---|---|
 | `install.sh` | Установщик. Автоопределяет сеть Docker, порт AWG, создаёт скрипты и systemd-юниты |
-| `uninstall.sh` | Удаление routing rules, сервисов и generated files; **не полный rollback** системных изменений (см. раздел «Удаление») |
+| `uninstall.sh` | Удаление routing rules, сервисов и generated files; ownership-aware rollback системных изменений installer'а при доказанном ownership/checksum match (см. раздел «Удаление») |
 | `warp-docker-routing.sh` | Скрипт маршрутизации (создаётся автоматически в `/usr/local/sbin/`) |
 | `check-warp-routing.sh` | Watchdog: проверяет наличие tun-интерфейса и правил раз в минуту |
 | `warp-docker-routing.service` | Systemd unit для маршрутизации |
@@ -256,25 +256,22 @@ sudo ./uninstall.sh
 Это:
 - остановит и отключит routing/watchdog-сервисы;
 - сначала остановит watchdog, затем routing service; обычный `cleanup` оставляет fail-secure guard, после чего uninstaller вызывает явный `purge` и удаляет project-owned `iptables`, `ip rule`, terminal route и routing-table routes;
-- удалит generated scripts, systemd units и `/etc/sysctl.d/99-amnezia-mihomo.conf`.
+- выполнит ownership-aware rollback системных изменений installer'а (условия — ниже);
+- удалит generated scripts и systemd units.
 
-**Важно: это не полный rollback сервера к состоянию до установки.** Текущий `uninstall.sh`
-не восстанавливает автоматически:
+**Rollback опирается на ownership/pre-install state в `/var/lib/amnezia-mihomo-gateway`, который installer записывает при установке.** Каждое системное изменение восстанавливается только при доказанном владении: ownership-маркер плюс checksum match. Состояние, изменённое администратором после установки, не перезаписывается — uninstaller оставляет его без изменений и завершает шаг warning'ом. Pre-existing состояние (существовавший `daemon.json`, чужая запись в `rt_tables`, исходный DNS-механизм, чужие sysctl-значения) никогда не удаляется.
 
-- live-значения sysctl, уже применённые installer'ом;
-- `systemd-resolved`, если installer его отключил;
-- прежний `/etc/resolv.conf` и его immutable attribute;
-- запись `100 mihomo` в `/etc/iproute2/rt_tables`;
-- `/etc/docker/daemon.json`, если installer создал его;
-- автоматически пропатченный `config.yaml` Mihomo.
+Условия восстановления по компонентам:
+
+- **Mihomo `config.yaml`** — точное pre-install содержимое возвращается только при checksum match текущего файла с записанным пропатченным состоянием и отсутствии флага divergence; кандидат заранее проверяется `mihomo -t -f`, замена атомарная, затем Mihomo перезапускается (systemd-сервис или Docker-контейнер). При любом расхождении текущий config сохраняется.
+- **`/etc/docker/daemon.json`** — удаляется только если создан installer'ом (ownership-маркер) и не менялся после установки (checksum match); затем Docker перезапускается.
+- **`100 mihomo` в `/etc/iproute2/rt_tables`** — запись удаляется только при ownership-маркере и отсутствии runtime-потребителей (нет правил `ip rule` и маршрутов в таблице 100); если таблица ещё используется, запись сохраняется.
+- **DNS** — `systemd-resolved` и `/etc/resolv.conf` восстанавливаются по pre-install snapshot только если текущий `resolv.conf` всё ещё installer-owned (checksum match, обычный файл без symlink): возвращаются исходное содержимое, immutable-атрибут и исходный enabled/active-state `systemd-resolved`.
+- **sysctl** — файл `/etc/sysctl.d/99-amnezia-mihomo.conf` и live-значения (`net.core.default_qdisc`, `net.ipv4.tcp_congestion_control`, `net.ipv4.ip_forward`, `rp_filter` по интерфейсам) восстанавливаются только когда файл совпадает по checksum, а текущее live-значение всё ещё равно значению, выставленному installer'ом; admin-modified live-значения сохраняются с warning'ом.
+
+Если хотя бы один шаг не смог доказать ownership (изменённые файлы, неполный rollback-state, ошибка восстановления), uninstall завершает работу с ненулевым кодом выхода (2) и **сохраняет state-dir** для ручной проверки. При полном доказанном rollback state-dir удаляется.
 
 Перед patch `config.yaml` installer создаёт backup `.bak.<timestamp>`.
-
-Installer также сохраняет ownership/pre-install state в
-`/var/lib/amnezia-mihomo-gateway`: кто добавил `100 mihomo`, создавался ли проектом
-`/etc/docker/daemon.json`, его checksum, а также точный исходный Mihomo `config.yaml` и checksum
-пропатченной версии. Текущий `uninstall.sh` пока не использует эти данные автоматически —
-они нужны для будущего безопасного rollback без угадывания и удаления чужих настроек.
 
 Подробный live-аудит и release gates:
 [docs/LIVE_AUDIT_2026-09-23.md](docs/LIVE_AUDIT_2026-09-23.md).
