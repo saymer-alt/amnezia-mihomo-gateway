@@ -124,11 +124,14 @@ still does not perform automatic ownership-based rollback until its disposable-V
   oneshot unit/script. With `RemainAfterExit=yes`, an already-active unit is not re-executed. Installer must perform
   a synchronous routing-service restart after `daemon-reload`, while fail-secure barriers are already installed.
 - The watchdog restarts Mihomo once per minute if `tun-mihomo` is absent and restarts
-  `warp-docker-routing.service` if rules disappear — check changes to this loop for
-  restart loops.
+  `warp-docker-routing.service` if the gateway topology is incomplete — check changes to this loop for
+  restart loops. Its healthy-state contract includes the source/fwmark rules, preferred TUN default,
+  terminal unreachable and fake-IP routes, the FORWARD hook plus all three `AMG_FAILSECURE` rules,
+  outer-AWG MARK, TCPMSS clamp, TUN MASQUERADE, reverse-destination FORWARD allowance, and absence of
+  the legacy broad source ACCEPT.
   Table 100 is registered as `100 mihomo`, so `ip rule show` may render the same rule as
   `lookup mihomo` instead of `lookup 100`; watchdog checks must accept both forms and must
-  re-check state after self-heal before returning failure.
+  re-check the full contract after self-heal before returning success.
 - Do not unify the "service stopped" and "tun-mihomo crashed" scenarios — they have different effects
   (direct egress vs black hole).
 
