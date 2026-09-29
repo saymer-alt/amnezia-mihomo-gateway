@@ -58,25 +58,30 @@ and regression tests for the generated watchdog logic (including named/numeric r
    checksum and docker0 gateway in `/var/lib/amnezia-mihomo-gateway`.
 6. Auto-patches the Mihomo config: searches for `config.yaml` in `/etc/mihomo /opt/mihomo /root /home`
    (maxdepth 3), creates backup `.bak.<epoch>`, stores the exact first pre-install config plus path/checksum metadata
-   in `/var/lib/amnezia-mihomo-gateway`, then applies 10 sed/awk changes: `fake-ip-range: 198.18.0.0/16`,
-   removal of legacy top-level `tun.inet4-address` (per-proxy TUN listeners are preserved), `stack: gvisor`, `auto-route: false`, `mtu: 1420`,
-   `gso: true`, `auto-detect-interface: true`, `find-process-mode: off`,
-   `store-selected/store-fake-ip: false`, removal of `endpoint-independent-nat`. Every change
-   handles both "key exists" (sed) and "key absent" (awk insertion) — preserve both branches.
-7. Generates `/usr/local/sbin/warp-docker-routing.sh`: waits for `tun-mihomo` for up to 30 seconds,
-   sets `txqueuelen 5000`, then routes (`default dev tun-mihomo table 100`;
-   `fake-ip-range` through the TUN in main), then rules (`from <docker-subnet> lookup 100 prio 100`;
-   `fwmark 0x88 lookup main prio 40`), then iptables (MARK WG replies, `TCPMSS
-   --clamp-mss-to-pmtu`, MASQUERADE, FORWARD ACCEPT at positions 1–2). Idempotency: old
-   rules are removed before adding new ones, and new ones use the `-C || -A/-I` pattern. The
-   `cleanup` argument removes everything.
+   in `/var/lib/amnezia-mihomo-gateway`, then applies the Mihomo 1.19.31 contract only to the intended top-level
+   `dns`, `tun`, `profile`, `find-process-mode` and `endpoint-independent-nat` paths. Nested listener/proxy keys
+   are not rewritten. The patcher uses a same-directory temporary file, `flock`, preserves source metadata via
+   `cp --preserve=all`, optionally validates with local `mihomo -t -f`, then replaces the original with a same-filesystem
+   atomic rename. Ambiguous structures (duplicates, inline target mappings, unsupported indentation), symlinks and
+   multi-hardlink config files fail closed instead of being guessed. A missing `profile` section is created; exactly one
+   top-level `dns` and `tun` section is required.
+7. Generates `/usr/local/sbin/warp-docker-routing.sh`. Before touching the source rule it installs two independent
+   fail-secure barriers: terminal `unreachable default metric 42760` in table 100 and the project-owned
+   `AMG_FAILSECURE` FORWARD chain. The chain permits client traffic only through `tun-mihomo` or the already-marked
+   outer AWG reply path; other traffic from the AWG Docker subnet is rejected. The script then waits for `tun-mihomo`,
+   sets `txqueuelen 5000`, installs the preferred TUN default (metric 10), fake-IP route, source/fwmark rules, MARK,
+   TCPMSS, MASQUERADE and reverse FORWARD allowance. Runtime `cleanup` deliberately keeps the guard and terminal
+   route; only explicit `purge` removes the safety barriers during uninstall.
 8. Generates `/usr/local/sbin/check-warp-routing.sh` (watchdog) and three units:
    `warp-docker-routing.service` (oneshot + `RemainAfterExit`, `ExecStop=cleanup`),
    `check-warp-routing.service` + `.timer` (checks once per minute, `OnBootSec=2min`).
-9. Restarts Mihomo (systemd service or Docker container), runs `daemon-reload`,
-   and `enable --now` for the service and timer.
+9. Installs the fail-secure guard, restarts Mihomo (systemd service or Docker container), runs `daemon-reload`,
+   explicitly enables and restarts `warp-docker-routing.service`, then enables the watchdog timer.
+   The explicit routing-service restart is required on repeated installs because `Type=oneshot` + `RemainAfterExit=yes`
+   remains active and `enable --now` alone does not re-run the newly generated `ExecStart`.
 
-Repeated execution of install.sh is idempotent: a new Mihomo config `.bak` is created, rules are recreated,
+Repeated execution of install.sh is idempotent: a new Mihomo config `.bak` is created, the freshly generated
+routing script is synchronously reconciled even when the oneshot unit was already active, rules are recreated,
 and existing sysctl/DNS values are not duplicated. State tracking is metadata-only; production `uninstall.sh`
 still does not perform automatic ownership-based rollback until its disposable-VPS release gate is completed.
 
@@ -90,10 +95,12 @@ still does not perform automatic ownership-based rollback until its disposable-V
 - **Priority 100 / table 100**: removing the rule makes client traffic leave directly using the real
   VPS IP (de-anonymization), rather than merely "stopping working".
 - **`rp_filter=0`**: with 1, the kernel drops asymmetric packets (docker bridge → TUN).
-- **Fail-secure**: if `tun-mihomo` goes down, there is no fallback route — clients lose Internet access,
-  but the VPS IP is not exposed. The watchdog repairs Mihomo/rules and must NEVER add a
-  direct fallback route. A separate scenario is `ExecStop=cleanup`, which intentionally removes the rules
-  and returns traffic to main (direct egress) — this is intended unit behavior, not a failure.
+- **Fail-secure is independent of the normal TUN route**: table 100 retains a terminal `unreachable default`, while
+  `AMG_FAILSECURE` blocks AWG-subnet forwarding to ordinary WAN unless the packet is the marked outer AWG reply.
+  Losing the TUN route or the source rule must fail closed. Runtime `ExecStop=cleanup` keeps these barriers; only
+  explicit uninstall `purge` may remove them. The watchdog repairs the barriers and must NEVER add a direct fallback route.
+- **Strict ICMP privacy**: Mihomo 1.19.31 with gVisor can create host ICMP sockets outside normal TCP/UDP proxy matching.
+  The project contract therefore requires top-level `tun.disable-icmp-forwarding: true`.
 - **`TCPMSS --clamp-mss-to-pmtu` + `mtu: 1420`**: double encapsulation AWG+WARP; according to
   the owner's measurements, clamp gives roughly 2x speed. Do not change without new measurements.
 - **An IPv4 address on the TUN is required for the IPv4/NAT scenario**, but on **Mihomo 1.19.31** the top-level `RawTun.Inet4Address` field is not parsed. `parseTun()` derives the effective TUN IPv4 prefix from `dns.fake-ip-range` and forces a `/30` prefix. Do not claim that writing top-level `tun.inet4-address` controls the live address on this version. Per-proxy TUN listeners use a different config path where `inet4-address` is supported.
@@ -104,18 +111,27 @@ still does not perform automatic ownership-based rollback until its disposable-V
 
 - Any rule that sends the SERVER'S OWN traffic into `tun-mihomo` (`auto-route: true`,
   rules without `from <docker-subnet>`, changes to the main table) — loss of SSH access.
-- Application order: routes are created in table 100 BEFORE `ip rule add`; in the reverse order,
-  client traffic falls into a black hole between steps. Removing old rules before adding
-  new ones is also part of the order, not "unnecessary code".
+- Application order: the independent fail-secure guard and terminal route must exist BEFORE any source-rule deletion,
+  TUN restart or routing reconciliation. Do not flush the guard chain during a normal reconcile: rebuilding it through
+  an empty state would recreate the exposure window this protection is intended to close.
 - `resolv.conf`, systemd-resolved, `/etc/docker/daemon.json` are system-wide state not
   owned by this project; preserve the current behavior ("only if absent/active").
-- FORWARD ACCEPT is inserted at positions 1–2 and intentionally bypasses the default UFW DROP.
+- Mihomo config mutation must remain path-scoped and atomic. Never restore global `sed`/unscoped key replacement,
+  fixed `/tmp/mihomo_config.yaml` staging, or replacement that changes owner/group/mode. Comments are not keys;
+  nested listener/proxy fields must survive unchanged. Unsupported structures must fail before replacing the source file.
+- Source-side forwarding is owned by `AMG_FAILSECURE`; the legacy broad source `FORWARD ... ACCEPT` is removed. The reverse `-d <docker-subnet>` allowance remains for return traffic.
+- Repeated installation must not rely on `systemctl enable --now warp-docker-routing.service` to apply a rewritten
+  oneshot unit/script. With `RemainAfterExit=yes`, an already-active unit is not re-executed. Installer must perform
+  a synchronous routing-service restart after `daemon-reload`, while fail-secure barriers are already installed.
 - The watchdog restarts Mihomo once per minute if `tun-mihomo` is absent and restarts
-  `warp-docker-routing.service` if rules disappear — check changes to this loop for
-  restart loops.
+  `warp-docker-routing.service` if the gateway topology is incomplete — check changes to this loop for
+  restart loops. Its healthy-state contract includes the source/fwmark rules, preferred TUN default,
+  terminal unreachable and fake-IP routes, the FORWARD hook plus all three `AMG_FAILSECURE` rules,
+  outer-AWG MARK, TCPMSS clamp, TUN MASQUERADE, reverse-destination FORWARD allowance, and absence of
+  the legacy broad source ACCEPT.
   Table 100 is registered as `100 mihomo`, so `ip rule show` may render the same rule as
   `lookup mihomo` instead of `lookup 100`; watchdog checks must accept both forms and must
-  re-check state after self-heal before returning failure.
+  re-check the full contract after self-heal before returning success.
 - Do not unify the "service stopped" and "tun-mihomo crashed" scenarios — they have different effects
   (direct egress vs black hole).
 
@@ -142,7 +158,9 @@ still does not perform automatic ownership-based rollback until its disposable-V
    "Troubleshooting" sections), the relevant heredocs, and templates. Behavioral changes belong in
    install.sh — it is the source of truth.
 6. After changes: run `bash -n install.sh`, `bash -n uninstall.sh`, `sh -n scripts/*.sh`,
-   `bash tests/test-watchdog.sh`, and `shellcheck -S error` when available. CI runs the same lightweight
+   `bash tests/test-mihomo-config-patch.sh`, `bash tests/test-fail-secure.sh`,
+   `bash tests/test-installer-reconcile.sh`, `bash tests/test-watchdog.sh`,
+   and `shellcheck -S error` when available. CI runs the same lightweight
    checks. Explicitly report which checks were performed and which are possible only on a VPS.
 7. For an ambiguous task, first investigate the repository and state the constraints you found,
    then ask the owner; do not make assumptions.
