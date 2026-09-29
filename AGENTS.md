@@ -75,10 +75,13 @@ and regression tests for the generated watchdog logic (including named/numeric r
 8. Generates `/usr/local/sbin/check-warp-routing.sh` (watchdog) and three units:
    `warp-docker-routing.service` (oneshot + `RemainAfterExit`, `ExecStop=cleanup`),
    `check-warp-routing.service` + `.timer` (checks once per minute, `OnBootSec=2min`).
-9. Restarts Mihomo (systemd service or Docker container), runs `daemon-reload`,
-   and `enable --now` for the service and timer.
+9. Installs the fail-secure guard, restarts Mihomo (systemd service or Docker container), runs `daemon-reload`,
+   explicitly enables and restarts `warp-docker-routing.service`, then enables the watchdog timer.
+   The explicit routing-service restart is required on repeated installs because `Type=oneshot` + `RemainAfterExit=yes`
+   remains active and `enable --now` alone does not re-run the newly generated `ExecStart`.
 
-Repeated execution of install.sh is idempotent: a new Mihomo config `.bak` is created, rules are recreated,
+Repeated execution of install.sh is idempotent: a new Mihomo config `.bak` is created, the freshly generated
+routing script is synchronously reconciled even when the oneshot unit was already active, rules are recreated,
 and existing sysctl/DNS values are not duplicated. State tracking is metadata-only; production `uninstall.sh`
 still does not perform automatic ownership-based rollback until its disposable-VPS release gate is completed.
 
@@ -117,6 +120,9 @@ still does not perform automatic ownership-based rollback until its disposable-V
   fixed `/tmp/mihomo_config.yaml` staging, or replacement that changes owner/group/mode. Comments are not keys;
   nested listener/proxy fields must survive unchanged. Unsupported structures must fail before replacing the source file.
 - Source-side forwarding is owned by `AMG_FAILSECURE`; the legacy broad source `FORWARD ... ACCEPT` is removed. The reverse `-d <docker-subnet>` allowance remains for return traffic.
+- Repeated installation must not rely on `systemctl enable --now warp-docker-routing.service` to apply a rewritten
+  oneshot unit/script. With `RemainAfterExit=yes`, an already-active unit is not re-executed. Installer must perform
+  a synchronous routing-service restart after `daemon-reload`, while fail-secure barriers are already installed.
 - The watchdog restarts Mihomo once per minute if `tun-mihomo` is absent and restarts
   `warp-docker-routing.service` if rules disappear — check changes to this loop for
   restart loops.
@@ -149,7 +155,8 @@ still does not perform automatic ownership-based rollback until its disposable-V
    "Troubleshooting" sections), the relevant heredocs, and templates. Behavioral changes belong in
    install.sh — it is the source of truth.
 6. After changes: run `bash -n install.sh`, `bash -n uninstall.sh`, `sh -n scripts/*.sh`,
-   `bash tests/test-mihomo-config-patch.sh`, `bash tests/test-fail-secure.sh`, `bash tests/test-watchdog.sh`,
+   `bash tests/test-mihomo-config-patch.sh`, `bash tests/test-fail-secure.sh`,
+   `bash tests/test-installer-reconcile.sh`, `bash tests/test-watchdog.sh`,
    and `shellcheck -S error` when available. CI runs the same lightweight
    checks. Explicitly report which checks were performed and which are possible only on a VPS.
 7. For an ambiguous task, first investigate the repository and state the constraints you found,

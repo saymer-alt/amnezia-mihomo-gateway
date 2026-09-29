@@ -173,3 +173,31 @@ Before PR #4 automatic rollback is promoted to production, use a disposable VPS 
 6. no project-owned routes/rules/units/generated files left after successful uninstall;
 7. Ubuntu/UFW-active gateway: container -> host DNS must work, and any installer-created firewall
    allowance must be tracked and removed only when proven owned.
+
+
+## Live repeated-install reconcile finding — 2026-09-28
+
+A live Ubuntu 24.04 VPS (`Mihomo 1.19.31`, systemd Mihomo, AWG subnet `172.29.172.0/24`)
+was used to validate the fail-secure/config-patcher stack from draft PRs #15/#16.
+
+Before the test, `warp-docker-routing.service` was already `active (exited)` from an earlier installation.
+The new installer rewrote the generated routing script/unit, installed the independent fail-secure guard and terminal
+`unreachable default metric 42760`, and restarted Mihomo. However, the old `systemctl enable --now warp-docker-routing.service`
+activation did not re-run `ExecStart` because the oneshot unit with `RemainAfterExit=yes` was already active.
+
+The immediate post-install state therefore contained:
+- the new `AMG_FAILSECURE` hook/chain;
+- the terminal unreachable route in table 100;
+- the old source rule;
+- no preferred `default dev tun-mihomo metric 10` yet;
+- the legacy broad source-side `FORWARD ... ACCEPT` still present below the fail-secure hook.
+
+This failed closed rather than leaking: the fail-secure barrier was already first in FORWARD and table 100 terminated
+with unreachable. The watchdog detected the incomplete state, restarted the routing service, and restored the full
+desired state: preferred TUN default plus terminal unreachable, priority-100 source rule, priority-40 fwmark rule,
+`AMG_FAILSECURE`, and removal of the legacy broad source ACCEPT.
+
+This is direct live evidence for the repeated-install H3 lifecycle bug. The installer fix is to enable the routing unit
+and then explicitly restart it after `daemon-reload` instead of relying on `enable --now`. The guard is installed
+before Mihomo/reconcile, so the explicit restart remains fail-secure. Promotion still requires repeating this exact
+live rerun and confirming that the installer itself reaches full desired state without watchdog repair.
