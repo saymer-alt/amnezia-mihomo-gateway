@@ -9,14 +9,16 @@ NC='\033[0m'
 
 echo -e "${YELLOW}=== Удаление скриптов маршрутизации ===${NC}"
 
-# Остановка и отключение служ
-systemctl disable --now warp-docker-routing.service 2>/dev/null || true
+# Сначала останавливаем watchdog, чтобы он не конкурировал с teardown.
 systemctl disable --now check-warp-routing.timer 2>/dev/null || true
 systemctl disable --now check-warp-routing.service 2>/dev/null || true
 
-# Вызов очистки iptables (если скрипт еще на месте)
+# Остановка routing service оставляет fail-secure guard на месте.
+systemctl disable --now warp-docker-routing.service 2>/dev/null || true
+
+# Только явный uninstall полностью удаляет project-owned guard и terminal route.
 if [ -f /usr/local/sbin/warp-docker-routing.sh ]; then
-    /usr/local/sbin/warp-docker-routing.sh cleanup
+    /usr/local/sbin/warp-docker-routing.sh purge
 fi
 
 # Удаление файлов

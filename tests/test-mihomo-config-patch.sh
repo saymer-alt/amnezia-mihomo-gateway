@@ -82,6 +82,7 @@ assert_absent() {
 assert_line '^[[:space:]]+fake-ip-range:[[:space:]]+198\.18\.0\.0/16$' 'fake-ip-range was not normalized'
 assert_line '^[[:space:]]+stack:[[:space:]]+gvisor$' 'stack was not normalized to gvisor'
 assert_line '^[[:space:]]+auto-route:[[:space:]]+false$' 'auto-route was not disabled'
+assert_line '^[[:space:]]+disable-icmp-forwarding:[[:space:]]+true$' 'ICMP forwarding was not disabled for strict privacy'
 assert_line '^[[:space:]]+auto-detect-interface:[[:space:]]+true$' 'auto-detect-interface was not enabled'
 assert_line '^[[:space:]]+mtu:[[:space:]]+1420$' 'MTU was not normalized'
 assert_line '^[[:space:]]+gso:[[:space:]]+true$' 'GSO was not enabled'
