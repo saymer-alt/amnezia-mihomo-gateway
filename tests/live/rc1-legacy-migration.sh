@@ -213,13 +213,23 @@ ip rule show | awk -v subnet="$DOCKER_NETS" '
     END { exit !ok }
 ' || fail "priority 100 source rule missing"
 
-ip route show table 100 |
-    grep -Eq '^default dev tun-mihomo .*metric 10$' \
-    || fail "preferred TUN default missing"
+ip route show table 100 | awk '
+    $1=="default" && $2=="dev" && $3=="tun-mihomo" {
+        for (i=1; i<=NF; i++) {
+            if ($i=="metric" && $(i+1)=="10") ok=1
+        }
+    }
+    END { exit !ok }
+' || fail "preferred TUN default missing"
 
-ip route show table 100 |
-    grep -Eq '^unreachable default .*metric 42760$' \
-    || fail "terminal unreachable route missing"
+ip route show table 100 | awk '
+    $1=="unreachable" && $2=="default" {
+        for (i=1; i<=NF; i++) {
+            if ($i=="metric" && $(i+1)=="42760") ok=1
+        }
+    }
+    END { exit !ok }
+' || fail "terminal unreachable route missing"
 
 ip route show "$FAKE_IP_RANGE" |
     grep -q 'dev tun-mihomo' \
