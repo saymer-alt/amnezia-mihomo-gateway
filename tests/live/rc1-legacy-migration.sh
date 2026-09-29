@@ -3,7 +3,11 @@
 # It installs the published RC over the existing legacy AMG installation.
 # It does NOT reboot or uninstall.
 
-set -Eeuo pipefail
+# Do not enable pipefail here: this live helper intentionally uses several
+# first-match pipelines (for example find|head and docker|head). With pipefail,
+# a correct early consumer exit can surface as SIGPIPE/141 from the producer
+# and abort the helper before any real validation fails.
+set -Eeu
 
 TAG="v2.0.0-rc.1"
 EXPECTED_RC_COMMIT="b72df223b57a167988e5125fbab278476d8271b2"
