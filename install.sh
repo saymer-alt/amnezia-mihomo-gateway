@@ -617,15 +617,30 @@ PROXY_IF="$PROXY_IF"
 DOCKER_NETS="$DOCKER_NETS"
 TABLE_ID="$TABLE_ID"
 TABLE_NAME="$TABLE_NAME"
+HOST_IF="$HOST_IF"
+WG_PORT="$WG_PORT"
+FAKE_IP_RANGE="$FAKE_IP_RANGE"
+
+legacy_source_accept_absent() {
+    ! iptables -C FORWARD -s "\$DOCKER_NETS" -j ACCEPT >/dev/null 2>&1
+}
 
 routing_ok() {
     ip link show "\$PROXY_IF" >/dev/null 2>&1 &&
     ip rule show | grep -Eq "^100:[[:space:]]+from \$DOCKER_NETS lookup (\$TABLE_ID|\$TABLE_NAME)( |\$)" &&
     ip rule show | grep -Eq "^40:[[:space:]]+from all fwmark 0x88(/0xffffffff)? lookup main( |\$)" &&
-    ip route show table "\$TABLE_ID" | grep -Fq "default dev \$PROXY_IF" &&
+    ip route show table "\$TABLE_ID" | grep -Eq "^default dev \$PROXY_IF .*metric 10( |\$)" &&
     ip route show table "\$TABLE_ID" | grep -Eq "^unreachable default .*metric 42760( |\$)" &&
+    ip route show "\$FAKE_IP_RANGE" | grep -Eq "^\$FAKE_IP_RANGE dev \$PROXY_IF( |\$)" &&
     iptables -C FORWARD -s "\$DOCKER_NETS" -j AMG_FAILSECURE >/dev/null 2>&1 &&
-    iptables -C AMG_FAILSECURE -s "\$DOCKER_NETS" -j REJECT --reject-with icmp-admin-prohibited >/dev/null 2>&1
+    iptables -C AMG_FAILSECURE -s "\$DOCKER_NETS" -o "\$PROXY_IF" -j ACCEPT >/dev/null 2>&1 &&
+    iptables -C AMG_FAILSECURE -s "\$DOCKER_NETS" -m mark --mark 0x88 -o "\$HOST_IF" -j ACCEPT >/dev/null 2>&1 &&
+    iptables -C AMG_FAILSECURE -s "\$DOCKER_NETS" -j REJECT --reject-with icmp-admin-prohibited >/dev/null 2>&1 &&
+    iptables -t mangle -C PREROUTING -s "\$DOCKER_NETS" -p udp --sport "\$WG_PORT" -j MARK --set-mark 0x88 >/dev/null 2>&1 &&
+    iptables -t mangle -C FORWARD -s "\$DOCKER_NETS" -o "\$PROXY_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu >/dev/null 2>&1 &&
+    iptables -t nat -C POSTROUTING -o "\$PROXY_IF" -j MASQUERADE >/dev/null 2>&1 &&
+    iptables -C FORWARD -d "\$DOCKER_NETS" -j ACCEPT >/dev/null 2>&1 &&
+    legacy_source_accept_absent
 }
 
 if ! ip link show "\$PROXY_IF" >/dev/null 2>&1; then
