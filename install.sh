@@ -101,6 +101,8 @@ EOF
 
 CURRENT_CC=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "")
 if [ "$CURRENT_CC" != "bbr" ]; then
+    : > "$STATE_DIR/sysctl_changed_default_qdisc"
+    : > "$STATE_DIR/sysctl_changed_tcp_congestion_control"
     echo "net.core.default_qdisc = fq" >> "$SYSCTL_FILE"
     echo "net.ipv4.tcp_congestion_control = bbr" >> "$SYSCTL_FILE"
     echo -e "${CYAN}    -> BBR добавлен.${NC}"
@@ -110,6 +112,7 @@ fi
 
 CURRENT_IPF=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "0")
 if [ "$CURRENT_IPF" != "1" ]; then
+    : > "$STATE_DIR/sysctl_changed_ip_forward"
     echo "net.ipv4.ip_forward = 1" >> "$SYSCTL_FILE"
 fi
 
