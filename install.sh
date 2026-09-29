@@ -631,7 +631,7 @@ routing_ok() {
     ip rule show | grep -Eq "^40:[[:space:]]+from all fwmark 0x88(/0xffffffff)? lookup main( |\$)" &&
     ip route show table "\$TABLE_ID" | grep -Eq "^default dev \$PROXY_IF .*metric 10( |\$)" &&
     ip route show table "\$TABLE_ID" | grep -Eq "^unreachable default .*metric 42760( |\$)" &&
-    ip route show table "\$TABLE_ID" | grep -Eq "^\$FAKE_IP_RANGE dev \$PROXY_IF( |\$)" &&
+    ip route show "\$FAKE_IP_RANGE" | grep -Eq "^\$FAKE_IP_RANGE dev \$PROXY_IF( |\$)" &&
     iptables -C FORWARD -s "\$DOCKER_NETS" -j AMG_FAILSECURE >/dev/null 2>&1 &&
     iptables -C AMG_FAILSECURE -s "\$DOCKER_NETS" -o "\$PROXY_IF" -j ACCEPT >/dev/null 2>&1 &&
     iptables -C AMG_FAILSECURE -s "\$DOCKER_NETS" -m mark --mark 0x88 -o "\$HOST_IF" -j ACCEPT >/dev/null 2>&1 &&
