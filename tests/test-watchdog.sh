@@ -71,6 +71,9 @@ case "$*" in
     if ! missing terminal-route; then
       echo "unreachable default metric 42760"
     fi
+    exit 0
+    ;;
+  "route show 198.18.0.0/16")
     if ! missing fake-route; then
       echo "198.18.0.0/16 dev tun-mihomo scope link"
     fi
