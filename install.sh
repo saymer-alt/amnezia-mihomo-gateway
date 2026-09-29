@@ -72,11 +72,27 @@ echo -e " - Порт AWG:    $WG_PORT"
 echo -e " - Интерфейс:   $HOST_IF"
 echo -e " - Прокси TUN:  $PROXY_IF"
 
-# 2. SYSCTL: только то, чего нет (не ломаем существующий hardening)
+# 2. SYSCTL: сохраняем pre-install state один раз и меняем только нужные значения.
 echo -e "${YELLOW}[*] Проверка sysctl...${NC}"
 SYSCTL_FILE="/etc/sysctl.d/99-amnezia-mihomo.conf"
-rm -f "$SYSCTL_FILE"
 
+if [ ! -f "$STATE_DIR/sysctl_state_recorded" ]; then
+    if [ -e "$SYSCTL_FILE" ] || [ -L "$SYSCTL_FILE" ]; then
+        cp -a --no-dereference -- "$SYSCTL_FILE" "$STATE_DIR/sysctl_file_original"
+        : > "$STATE_DIR/sysctl_file_existed"
+    fi
+    sysctl -n net.core.default_qdisc 2>/dev/null > "$STATE_DIR/sysctl_original_default_qdisc" || true
+    sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null > "$STATE_DIR/sysctl_original_tcp_congestion_control" || true
+    sysctl -n net.ipv4.ip_forward 2>/dev/null > "$STATE_DIR/sysctl_original_ip_forward" || true
+    : > "$STATE_DIR/sysctl_original_rp_filter"
+    for i in /proc/sys/net/ipv4/conf/*/rp_filter; do
+        [ -e "$i" ] || continue
+        printf '%s\t%s\n' "$(basename "$(dirname "$i")")" "$(cat "$i")" >> "$STATE_DIR/sysctl_original_rp_filter"
+    done
+    : > "$STATE_DIR/sysctl_state_recorded"
+fi
+
+rm -f "$SYSCTL_FILE"
 cat << 'EOF' > "$SYSCTL_FILE"
 # rp_filter ОБЯЗАТЕЛЬНО 0 для gvisor
 net.ipv4.conf.all.rp_filter = 0
@@ -98,7 +114,11 @@ if [ "$CURRENT_IPF" != "1" ]; then
 fi
 
 sysctl -p "$SYSCTL_FILE" > /dev/null
-for i in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "$i"; done
+for i in /proc/sys/net/ipv4/conf/*/rp_filter; do
+    [ -e "$i" ] || continue
+    echo 0 > "$i"
+done
+sha256sum "$SYSCTL_FILE" | awk '{print $1}' > "$STATE_DIR/sysctl_file_managed_sha256"
 
 # 2.5 Именованная таблица маршрутизации
 if ! grep -q "^$TABLE_ID $TABLE_NAME$" /etc/iproute2/rt_tables; then
@@ -106,9 +126,25 @@ if ! grep -q "^$TABLE_ID $TABLE_NAME$" /etc/iproute2/rt_tables; then
     : > "$STATE_DIR/rt_table_added"
 fi
 
-# 2.6 DNS
+# 2.6 DNS: ownership state записывается ДО изменения systemd-resolved/resolv.conf.
 echo -e "${YELLOW}[*] Настройка DNS...${NC}"
 if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    if [ ! -f "$STATE_DIR/dns_state_recorded" ]; then
+        : > "$STATE_DIR/resolved_was_active"
+        if systemctl is-enabled --quiet systemd-resolved 2>/dev/null; then
+            : > "$STATE_DIR/resolved_was_enabled"
+        fi
+        if [ -e /etc/resolv.conf ] || [ -L /etc/resolv.conf ]; then
+            cp -a --no-dereference -- /etc/resolv.conf "$STATE_DIR/resolv.conf.original"
+            if lsattr -d /etc/resolv.conf 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
+                : > "$STATE_DIR/resolv_original_immutable"
+            fi
+        else
+            : > "$STATE_DIR/resolv_original_missing"
+        fi
+        : > "$STATE_DIR/dns_state_recorded"
+    fi
+
     systemctl disable --now systemd-resolved 2>/dev/null || true
     chattr -i /etc/resolv.conf 2>/dev/null || true
     rm -f /etc/resolv.conf
@@ -118,9 +154,10 @@ nameserver 8.8.8.8
 options timeout:2 attempts:3
 EOF
     chattr +i /etc/resolv.conf
-    echo -e "${CYAN}    -> systemd-resolved отключён.${NC}"
+    sha256sum /etc/resolv.conf | awk '{print $1}' > "$STATE_DIR/resolv_managed_sha256"
+    echo -e "${CYAN}    -> systemd-resolved отключён; исходная семантика resolv.conf сохранена.${NC}"
 else
-    echo -e "${CYAN}    -> systemd-resolved уже отключён.${NC}"
+    echo -e "${CYAN}    -> systemd-resolved уже отключён, DNS state не присваиваем.${NC}"
 fi
 
 DOCKER_GW=$(ip -4 addr show docker0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
