@@ -65,3 +65,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tests/test-watchdog.sh
+
+      - name: Ownership rollback regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/test-ownership-rollback.sh
