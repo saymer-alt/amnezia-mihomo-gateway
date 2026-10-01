@@ -3,7 +3,8 @@
 # AmneziaAWG to Mihomo (TUN) Routing Installer v2.0
 # Проверено: 18/26 -> 40/82+ Мбит на 2-core/1GB VPS
 # Оптимизации: clamp-mss-to-pmtu, mtu 1420, gso, find-process-mode off,
-#              store-selected/fake-ip false
+#              store-selected false; store-fake-ip сохраняется из config.yaml
+#              (Domain Detection: fake-ip mapping обязан переживать рестарт)
 # Безопасность: gvisor + auto-route:false (SSH не отвалится)
 # =========================================================
 
@@ -426,7 +427,9 @@ if [ -n "$MIHOMO_CONFIG" ]; then
                       if (line ~ /^  store-fake-ip:[[:space:]]*/) {
                           seen_store_fake++
                           if (seen_store_fake > 1) fail("duplicate profile.store-fake-ip")
-                          print "  store-fake-ip: false"
+                          # Domain Detection: значение генератора (store-fake-ip: true)
+                          # сохраняется как есть; false дописывается только при отсутствии ключа.
+                          print
                           next
                       }
                       print
@@ -782,7 +785,7 @@ echo -e "  5. mtu: 1420"
 echo -e "  6. gso: true"
 echo -e "  7. auto-detect-interface: true"
 echo -e "  8. find-process-mode: off"
-echo -e "  9. store-selected: false, store-fake-ip: false"
+echo -e "  9. store-selected: false; store-fake-ip: сохраняется из config.yaml (нет ключа — false)"
 echo -e "  10. endpoint-independent-nat удалён (ломает gvisor)"
 echo -e "  + TCPMSS --clamp-mss-to-pmtu (проверено: +~2x скорость)"
 echo ""

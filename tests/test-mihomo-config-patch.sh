@@ -26,6 +26,11 @@ if grep -Fq '/tmp/mihomo_config.yaml' "$ROOT_DIR/install.sh"; then
   exit 1
 fi
 
+if grep -Fq 'store-selected: false, store-fake-ip: false' "$ROOT_DIR/install.sh"; then
+  echo "FAIL: installer summary still claims unconditional store-fake-ip: false (DDP contract preserves the generator value)" >&2
+  exit 1
+fi
+
 cat > "$MOCK_BIN/mihomo" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -125,6 +130,8 @@ OWNER_AFTER="$(stat -c '%u:%g' "$CONFIG")"
 [[ "$OWNER_AFTER" == "$OWNER_BEFORE" ]] || { echo "FAIL: owner/group changed $OWNER_BEFORE -> $OWNER_AFTER" >&2; exit 1; }
 
 assert_line "$CONFIG" '^[[:space:]]+fake-ip-range:[[:space:]]+198\.18\.0\.0/16$' 'dns.fake-ip-range was not normalized'
+# Domain Detection: generator-owned store-fake-ip value must survive the patcher
+assert_line "$CONFIG" '^[[:space:]]+store-fake-ip:[[:space:]]+true$' 'profile.store-fake-ip: true was overwritten by the patcher'
 assert_line "$CONFIG" '^find-process-mode:[[:space:]]+off$' 'top-level find-process-mode was not added'
 assert_line "$CONFIG" '^[[:space:]]+disable-icmp-forwarding:[[:space:]]+true$' 'tun.disable-icmp-forwarding was not enabled'
 assert_line "$CONFIG" '^[[:space:]]+auto-detect-interface:[[:space:]]+true$' 'tun.auto-detect-interface was not inserted'
@@ -255,5 +262,48 @@ if run_patcher "$LINK"; then
   exit 1
 fi
 assert_unchanged_on_failure "$REAL" "$REAL_SHA" "symlink refusal"
+
+# Domain Detection compatibility: the link-generators VPS profile emits
+# tun.dns-hijack and a top-level sniffer section; the patcher must preserve
+# unknown keys verbatim and keep store-fake-ip: true.
+DDP="$TMP_DIR/ddp.yaml"
+cat > "$DDP" <<'EOF'
+mixed-port: 7890
+sniffer:
+  enable: true
+  parse-pure-ip: true
+  force-dns-mapping: true
+  override-destination: false
+  sniff:
+    TLS:
+      ports:
+        - 443
+        - 8443
+    QUIC:
+      ports:
+        - 443
+        - 8443
+    HTTP:
+      ports:
+        - 80
+        - 8080-8880
+dns:
+  enable: true
+tun:
+  enable: true
+  dns-hijack:
+    - any:53
+    - tcp://any:53
+profile:
+  store-selected: false
+  store-fake-ip: true
+EOF
+run_patcher "$DDP"
+assert_line "$DDP" '^  store-fake-ip:[[:space:]]+true$' 'Domain Detection store-fake-ip: true was not preserved'
+assert_line "$DDP" '^    - any:53$' 'tun.dns-hijack entry was not preserved'
+assert_line "$DDP" '^    - tcp://any:53$' 'tun.dns-hijack tcp entry was not preserved'
+assert_line "$DDP" '^  override-destination:[[:space:]]+false$' 'sniffer.override-destination was not preserved'
+assert_line "$DDP" '^    QUIC:$' 'sniffer QUIC block was not preserved'
+grep -Eq '^  fake-ip-range:[[:space:]]+198\.18\.0\.0/16$' "$DDP" || { echo "FAIL: ddp fake-ip-range not normalized" >&2; exit 1; }
 
 echo "All scoped Mihomo config patch regression tests passed."

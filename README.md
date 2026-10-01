@@ -280,6 +280,31 @@ sudo ./uninstall.sh
 
 ## Траблшутинг
 
+### После `sysctl -p /etc/sysctl.conf` перестал работать AWG через Docker
+
+Для этой схемы `rp_filter=0` критичен: Docker-трафик приходит через bridge, а уходит через `tun-mihomo`. Если в общем `/etc/sysctl.conf` остались старые строки вроде:
+
+```text
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+```
+
+то команда `sysctl -p /etc/sysctl.conf` может повторно применить их и сломать Docker-based AWG path, даже если project-owned fragment и routing service настроены правильно.
+
+Проверь live-состояние:
+
+```bash
+sysctl net.ipv4.conf.all.rp_filter \
+       net.ipv4.conf.default.rp_filter \
+       net.ipv4.conf.ens3.rp_filter \
+       net.ipv4.conf.docker0.rp_filter \
+       net.ipv4.conf.amn0.rp_filter
+```
+
+Для активного `amnezia-mihomo-gateway` ожидается `0` на участвующих интерфейсах. Не используйте whole-file reload как способ применить одну отдельную sysctl-настройку на production gateway: применяйте конкретный ключ или отдельный managed fragment и затем проверяйте live `rp_filter`.
+
+Реальный инцидент 2026-09-29: после whole-file reload Docker AWG 2.0 перестал работать, AWG 3.1 через 3X-UI продолжил работать, а reboot восстановил AWG 2.0. Это сильное причинное свидетельство в пользу `rp_filter`, хотя broken runtime до reboot не был снят packet capture'ом. Отслеживание: issue #31.
+
 ### Клиент не подключается к AWG после установки
 ```bash
 # Проверь, что ответы AWG не уходят в tun
