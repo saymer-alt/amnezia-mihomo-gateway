@@ -26,6 +26,11 @@ if grep -Fq '/tmp/mihomo_config.yaml' "$ROOT_DIR/install.sh"; then
   exit 1
 fi
 
+if grep -Fq 'store-selected: false, store-fake-ip: false' "$ROOT_DIR/install.sh"; then
+  echo "FAIL: installer summary still claims unconditional store-fake-ip: false (DDP contract preserves the generator value)" >&2
+  exit 1
+fi
+
 cat > "$MOCK_BIN/mihomo" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
