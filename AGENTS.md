@@ -23,6 +23,7 @@ run ONLY on the target VPS, never on the development host.
 | `README.md` | Detailed RU documentation: architecture, Mihomo configuration, verification, troubleshooting |
 | `install.md` | Short RU installation guide; the heading "awg-warp-router" is the old project name |
 | `scripts/` | Reference templates of generated scripts with placeholders `<DOCKER_SUBNET>`, `<WG_PORT>`, `<HOST_INTERFACE>`; they are NOT executed and lag behind install.sh (see "Known inconsistencies") |
+| `tests/live/` | Disposable-VPS live-acceptance kit (orchestration/evidence/verification ONLY, no gateway logic): guarded destructive steps (`AMG_DISPOSABLE_TEST_HOST=YES` + `--confirm-disposable` + prior-state refusal + checkpoint/machine-id binding), downloads the PUBLIC stable installer with pinned SHA256, runs baseline → install → DDP proof → repeated install → reboot → uninstall → baseline-compare. `test-kit.sh` (fixture tests, no VPS/root needed) runs in CI. The kit never replaces or patches install.sh/uninstall.sh |
 | `systemd/` | Reference copies of the three units; they match the heredocs in install.sh |
 | `docs/LIVE_AUDIT_2026-09-23.md` | Live VPS evidence ledger and release gates for rollback/firewall work |
 | `LICENSE` | MIT |

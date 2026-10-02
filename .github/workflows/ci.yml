@@ -31,6 +31,9 @@ jobs:
           for test in tests/*.sh; do
             bash -n "$test"
           done
+          for test in tests/live/*.sh; do
+            bash -n "$test"
+          done
 
       - name: ShellCheck errors
         shell: bash
@@ -40,7 +43,7 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y shellcheck
           fi
-          shellcheck -S error install.sh uninstall.sh scripts/*.sh tests/*.sh
+          shellcheck -S error install.sh uninstall.sh scripts/*.sh tests/*.sh tests/live/*.sh
 
       - name: Mihomo config patch regression tests
         shell: bash
@@ -71,3 +74,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tests/test-ownership-rollback.sh
+
+      - name: Live acceptance kit fixture tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/live/test-kit.sh
