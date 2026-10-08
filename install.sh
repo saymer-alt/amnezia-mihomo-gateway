@@ -277,10 +277,11 @@ if [ -n "$MIHOMO_CONFIG" ]; then
                   } else if (which == "tun") {
                       if (!seen_stack) print "  stack: gvisor"
                       if (!seen_autoroute) print "  auto-route: false"
-                      if (!seen_icmp) print "  disable-icmp-forwarding: true"
                       if (!seen_mtu) print "  mtu: 1420"
                       if (!seen_gso) print "  gso: true"
                       if (!seen_autodetect) print "  auto-detect-interface: true"
+                      # Emit this managed key once, before trailing section comments.
+                      print "  disable-icmp-forwarding: true"
                   } else if (which == "profile") {
                       if (!seen_store_selected) print "  store-selected: false"
                       if (!seen_store_fake) print "  store-fake-ip: false"
@@ -288,7 +289,12 @@ if [ -n "$MIHOMO_CONFIG" ]; then
               }
               function close_section() {
                   if (section != "") emit_missing(section)
+                  flush_trivia()
                   section=""
+              }
+              function flush_trivia() {
+                  if (trivia != "") printf "%s", trivia
+                  trivia=""
               }
               function check_direct_indent(line, n) {
                   if (indent_checked || line ~ /^[[:space:]]*($|#)/) return
@@ -311,6 +317,30 @@ if [ -n "$MIHOMO_CONFIG" ]; then
               }
               {
                   line=$0
+
+                  # Indented block-scalar contents can look like comments. They
+                  # are data, including trailing blank lines with a + chomper.
+                  if (section == "tun" && scalar_indent > 0) {
+                      if (line ~ /^[[:space:]]*$/ ||
+                          (match(line, /^ +/) && RLENGTH > scalar_indent)) {
+                          print
+                          next
+                      }
+                      scalar_indent=0
+                  }
+
+                  # Hold TUN trailing comments/blank lines until we know whether
+                  # another child follows or the mapping ends. Keep their bytes.
+                  if (section == "tun" && line ~ /^[[:space:]]*($|#)/) {
+                      trivia=trivia line "\n"
+                      next
+                  }
+                  if (section == "tun" && line ~ /^  disable-icmp-forwarding:[[:space:]]*/) {
+                      seen_icmp++
+                      if (seen_icmp > 1) fail("duplicate tun.disable-icmp-forwarding")
+                      next
+                  }
+                  if (section == "tun" && line ~ /^[[:space:]]/) flush_trivia()
 
                   if (line ~ /^dns:/ && line !~ /^dns:[[:space:]]*(#.*)?$/) {
                       fail("inline/anchored top-level dns mapping is unsupported")
@@ -402,12 +432,6 @@ if [ -n "$MIHOMO_CONFIG" ]; then
                           print "  auto-route: false"
                           next
                       }
-                      if (line ~ /^  disable-icmp-forwarding:[[:space:]]*/) {
-                          seen_icmp++
-                          if (seen_icmp > 1) fail("duplicate tun.disable-icmp-forwarding")
-                          print "  disable-icmp-forwarding: true"
-                          next
-                      }
                       if (line ~ /^  mtu:[[:space:]]*/) {
                           seen_mtu++
                           if (seen_mtu > 1) fail("duplicate tun.mtu")
@@ -425,6 +449,11 @@ if [ -n "$MIHOMO_CONFIG" ]; then
                           if (seen_autodetect > 1) fail("duplicate tun.auto-detect-interface")
                           print "  auto-detect-interface: true"
                           next
+                      }
+                      if (line !~ /^[[:space:]]*#/ &&
+                          line ~ /:[[:space:]]*[|>][0-9+-]*[[:space:]]*(#.*)?$/) {
+                          match(line, /^ +/)
+                          scalar_indent=RLENGTH
                       }
                       print
                       next

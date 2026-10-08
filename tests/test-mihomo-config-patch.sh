@@ -306,4 +306,72 @@ assert_line "$DDP" '^  override-destination:[[:space:]]+false$' 'sniffer.overrid
 assert_line "$DDP" '^    QUIC:$' 'sniffer QUIC block was not preserved'
 grep -Eq '^  fake-ip-range:[[:space:]]+198\.18\.0\.0/16$' "$DDP" || { echo "FAIL: ddp fake-ip-range not normalized" >&2; exit 1; }
 
+# #32: new insertion and an already misplaced managed key must precede the
+# trailing next-section comment. Reinstall must preserve every comment/byte.
+for existing in missing misplaced; do
+  COMMENTS="$TMP_DIR/comments-$existing.yaml"
+  cat > "$COMMENTS" <<'EOF'
+mixed-port: 7890
+tun:
+  enable: true
+  # Internal TUN comment
+  mtu: 1420
+
+# --- DNS SECTION ---
+EOF
+  if [ "$existing" = misplaced ]; then
+    printf '  disable-icmp-forwarding: true\n' >> "$COMMENTS"
+  fi
+  cat >> "$COMMENTS" <<'EOF'
+dns:
+  enable: true
+EOF
+  run_patcher "$COMMENTS"
+  awk '
+    /^  disable-icmp-forwarding: true$/ { key=NR; count++ }
+    /^# --- DNS SECTION ---$/ { comment=NR }
+    END { exit !(count == 1 && key < comment) }
+  ' "$COMMENTS" || { echo "FAIL: #32 $existing key placement" >&2; exit 1; }
+  assert_line "$COMMENTS" '^  # Internal TUN comment$' 'internal TUN comment lost'
+  cp "$COMMENTS" "$COMMENTS.first"
+  run_patcher "$COMMENTS"
+  cmp "$COMMENTS" "$COMMENTS.first" || { echo 'FAIL: comment fixture reinstall drift' >&2; exit 1; }
+  if python3 -c 'import yaml' 2>/dev/null; then
+    python3 - "$COMMENTS" <<'PY'
+import sys, yaml
+with open(sys.argv[1]) as stream:
+    data = yaml.safe_load(stream)
+assert data['tun']['disable-icmp-forwarding'] is True
+assert 'disable-icmp-forwarding' not in data['dns']
+PY
+  fi
+done
+
+SCALAR="$TMP_DIR/comments-scalar.yaml"
+cat > "$SCALAR" <<'EOF'
+tun:
+  enable: true
+  note: |+
+    # This is scalar data, not a YAML comment
+
+# --- DNS SECTION ---
+dns:
+  enable: true
+EOF
+cp "$SCALAR" "$SCALAR.original"
+run_patcher "$SCALAR"
+cp "$SCALAR" "$SCALAR.first"
+run_patcher "$SCALAR"
+cmp "$SCALAR" "$SCALAR.first"
+if python3 -c 'import yaml' 2>/dev/null; then
+  python3 - "$SCALAR.original" "$SCALAR" <<'PY'
+import sys, yaml
+with open(sys.argv[1]) as stream:
+    old = yaml.safe_load(stream)
+with open(sys.argv[2]) as stream:
+    new = yaml.safe_load(stream)
+assert old['tun']['note'] == new['tun']['note']
+PY
+fi
+
 echo "All scoped Mihomo config patch regression tests passed."
