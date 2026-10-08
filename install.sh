@@ -1,6 +1,6 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer v2.0
+# AmneziaAWG to Mihomo (TUN) Routing Installer v2.0.1
 # Проверено: 18/26 -> 40/82+ Мбит на 2-core/1GB VPS
 # Оптимизации: clamp-mss-to-pmtu, mtu 1420, gso, find-process-mode off,
 #              store-selected false; store-fake-ip сохраняется из config.yaml
@@ -16,7 +16,7 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${YELLOW}=== Запуск установки маршрутизации Amnezia -> Mihomo (v2.0) ===${NC}"
+echo -e "${YELLOW}=== Запуск установки маршрутизации Amnezia -> Mihomo (v2.0.1) ===${NC}"
 
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}Ошибка: Этот скрипт должен быть запущен от имени root.${NC}" 

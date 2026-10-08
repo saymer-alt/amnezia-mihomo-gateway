@@ -51,6 +51,19 @@ for s in "$KIT_DIR"/*.sh; do
   fi
 done
 
+# Pins must identify the product blobs shipped with this acceptance kit.
+# This reads local files only; it never invokes either installer.
+for product in install uninstall; do
+  expected="$(bash -c '. "$1/lib.sh"; case "$2" in install) printf "%s" "$EXPECTED_INSTALL_SHA256";; uninstall) printf "%s" "$EXPECTED_UNINSTALL_SHA256";; esac' _ "$KIT_DIR" "$product")"
+  actual="$(sha256sum "$KIT_DIR/../../$product.sh")"
+  actual="${actual%% *}"
+  if [ "$actual" = "$expected" ]; then
+    pass "$product acceptance pin matches product blob"
+  else
+    fail "$product acceptance pin differs from product blob"
+  fi
+done
+
 # --- §18: no opt-in -> refusal (before any root/docker requirement) -------------
 expect_refusal "run-pre-reboot refuses without AMG_DISPOSABLE_TEST_HOST" \
   env -u AMG_DISPOSABLE_TEST_HOST bash "$KIT_DIR/run-pre-reboot.sh" --confirm-disposable
