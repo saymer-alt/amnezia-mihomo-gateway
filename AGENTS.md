@@ -49,8 +49,10 @@ and regression tests for the generated watchdog logic (including named/numeric r
    container by `name=amnezia-awg` (first match), Docker network (prefers a name containing `amnezia`),
    subnet, WG UDP port (`docker port`, fallback `docker inspect`), default interface.
 2. `/etc/sysctl.d/99-amnezia-mihomo.conf`: `rp_filter=0` (required for gvisor); BBR+fq
-   are added ONLY if congestion control is not already bbr; `ip_forward=1` only if disabled —
-   existing network hardening is not overwritten. Also disables rp_filter live on all interfaces.
+   and `ip_forward=1` are added only when needed on the initial install. If the installer
+   owns these changes (recorded markers), reinstall persists its directives even when the
+   live kernel values are already correct. Externally owned values are not claimed.
+   Also disables rp_filter live on all interfaces.
 3. Table `100 mihomo` in `/etc/iproute2/rt_tables` (if the entry does not exist). The installer records an ownership marker when it adds the entry.
 4. DNS: if systemd-resolved is active, disables it, writes `/etc/resolv.conf`
    (1.1.1.1 / 8.8.8.8), and applies `chattr +i`.
