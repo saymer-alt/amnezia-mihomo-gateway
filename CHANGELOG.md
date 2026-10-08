@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Исследование #22: сравнение outer-AWG identity и opt-in namespace UDP-стенд с admission guards; production MARK/routing не изменён, packet acceptance остаётся gate.
+
 ### Исправлено
 
 - #21 (частично): DNS/Docker ownership admission отказывается от неопределённых типов/state, DNS rollback проверяет snapshot до mutation и stages atomic restore. Ошибки attributes/service/readback сохраняют evidence/status 2. Изменения host/container DNS semantics и live acceptance остаются вне этого patch.

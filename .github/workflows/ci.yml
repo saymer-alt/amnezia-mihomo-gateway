@@ -54,6 +54,10 @@ jobs:
           set -euo pipefail
           bash tests/test-mihomo-config-patch.sh
 
+      - name: Outer-AWG experiment admission guards (no network experiment)
+        shell: bash
+        run: python3 tests/test-outer-awg-lab-guards.py
+
       - name: Read-only rp_filter diagnostic fixtures
         shell: bash
         run: bash tests/test-rp-filter-diagnostics.sh
