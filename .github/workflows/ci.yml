@@ -27,6 +27,7 @@ jobs:
           set -euo pipefail
           bash -n install.sh
           bash -n uninstall.sh
+          bash -n doctor.sh
           for script in scripts/*.sh; do
             sh -n "$script"
           done
@@ -45,13 +46,17 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y shellcheck
           fi
-          shellcheck -S error install.sh uninstall.sh scripts/*.sh tests/*.sh tests/live/*.sh
+          shellcheck -S error install.sh uninstall.sh doctor.sh scripts/*.sh tests/*.sh tests/live/*.sh
 
       - name: Mihomo config patch regression tests
         shell: bash
         run: |
           set -euo pipefail
           bash tests/test-mihomo-config-patch.sh
+
+      - name: Read-only rp_filter diagnostic fixtures
+        shell: bash
+        run: bash tests/test-rp-filter-diagnostics.sh
 
       - name: Fail-secure lifecycle regression tests
         shell: bash

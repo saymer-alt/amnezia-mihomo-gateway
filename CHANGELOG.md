@@ -4,6 +4,7 @@
 
 ### Исправлено
 
+- #31 (частично): read-only `doctor.sh` показывает runtime rp_filter для all/default/interfaces и потенциально конфликтующие persistent directives, включая wildcard/slash keys. Не выполняет reload и не меняет чужие файлы; историческая причина инцидента остаётся неподтверждённой.
 - #32: `tun.disable-icmp-forwarding` располагается перед trailing-комментариями следующей YAML-секции, включая ранее неверно размещённый ключ. Сохранены comments, block-scalar data и идемпотентность повторного патча; добавлены regressions.
 
 ## [2.0.1] - 2026-10-08
