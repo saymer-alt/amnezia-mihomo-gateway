@@ -1,0 +1,59 @@
+# tests/live/fixtures/ddp-config-skeleton.yaml
+#
+# Structure-only Mihomo config skeleton for a DISPOSABLE VPS carrying the
+# current vps-gateway / Domain Detection contract fields:
+#   profile.store-fake-ip: true, tun.dns-hijack, top-level sniffer.
+#
+# It deliberately contains NO credentials and uses DIRECT-only upstreams:
+# it proves the patcher/persistence contract, NOT traffic privacy. For the
+# traffic/privacy probe either replace the upstream with a real config from
+# the link-generators VPS profile, or rely on the trace-awg-net probe against
+# a host whose Mihomo has working upstreams.
+#
+# Place as /etc/mihomo/config.yaml on the disposable host before running
+# the acceptance kit (and start Mihomo with it).
+mixed-port: 7890
+mode: rule
+log-level: info
+find-process-mode: off
+profile:
+  store-selected: false
+  store-fake-ip: true
+dns:
+  enable: true
+  listen: :53
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.0/16
+  nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+tun:
+  enable: true
+  device: tun-mihomo
+  stack: gvisor
+  auto-route: false
+  auto-detect-interface: true
+  dns-hijack:
+    - any:53
+    - tcp://any:53
+sniffer:
+  enable: true
+  parse-pure-ip: true
+  force-dns-mapping: true
+  override-destination: false
+  sniff:
+    TLS:
+      ports:
+        - 443
+        - 8443
+    QUIC:
+      ports:
+        - 443
+        - 8443
+    HTTP:
+      ports:
+        - 80
+        - 8080-8880
+proxies: []
+rules:
+  - MATCH,DIRECT

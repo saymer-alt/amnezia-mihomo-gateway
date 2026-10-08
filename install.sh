@@ -1,6 +1,6 @@
 #!/bin/bash
 # =========================================================
-# AmneziaAWG to Mihomo (TUN) Routing Installer v2.0
+# AmneziaAWG to Mihomo (TUN) Routing Installer v2.0.1
 # Проверено: 18/26 -> 40/82+ Мбит на 2-core/1GB VPS
 # Оптимизации: clamp-mss-to-pmtu, mtu 1420, gso, find-process-mode off,
 #              store-selected false; store-fake-ip сохраняется из config.yaml
@@ -16,7 +16,7 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${YELLOW}=== Запуск установки маршрутизации Amnezia -> Mihomo (v2.0) ===${NC}"
+echo -e "${YELLOW}=== Запуск установки маршрутизации Amnezia -> Mihomo (v2.0.1) ===${NC}"
 
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}Ошибка: Этот скрипт должен быть запущен от имени root.${NC}" 
@@ -101,6 +101,8 @@ net.ipv4.conf.default.rp_filter = 0
 EOF
 
 CURRENT_CC=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "")
+# Existing ownership markers survive reinstall: runtime values alone cannot prove
+# persistence across a reboot. Do not claim ownership if BBR was already external.
 if [ "$CURRENT_CC" != "bbr" ]; then
     : > "$STATE_DIR/sysctl_changed_default_qdisc"
     : > "$STATE_DIR/sysctl_changed_tcp_congestion_control"
@@ -108,11 +110,22 @@ if [ "$CURRENT_CC" != "bbr" ]; then
     echo "net.ipv4.tcp_congestion_control = bbr" >> "$SYSCTL_FILE"
     echo -e "${CYAN}    -> BBR добавлен.${NC}"
 else
-    echo -e "${CYAN}    -> BBR уже активен, пропускаем.${NC}"
+    echo -e "${CYAN}    -> BBR уже активен извне, пропускаем.${NC}"
+fi
+# Each directive requires its own marker, including partially recorded state.
+if [ -f "$STATE_DIR/sysctl_changed_default_qdisc" ] &&
+   ! grep -q '^net.core.default_qdisc = fq$' "$SYSCTL_FILE"; then
+    echo "net.core.default_qdisc = fq" >> "$SYSCTL_FILE"
+fi
+if [ -f "$STATE_DIR/sysctl_changed_tcp_congestion_control" ] &&
+   ! grep -q '^net.ipv4.tcp_congestion_control = bbr$' "$SYSCTL_FILE"; then
+    echo "net.ipv4.tcp_congestion_control = bbr" >> "$SYSCTL_FILE"
 fi
 
 CURRENT_IPF=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "0")
-if [ "$CURRENT_IPF" != "1" ]; then
+if [ -f "$STATE_DIR/sysctl_changed_ip_forward" ]; then
+    echo "net.ipv4.ip_forward = 1" >> "$SYSCTL_FILE"
+elif [ "$CURRENT_IPF" != "1" ]; then
     : > "$STATE_DIR/sysctl_changed_ip_forward"
     echo "net.ipv4.ip_forward = 1" >> "$SYSCTL_FILE"
 fi

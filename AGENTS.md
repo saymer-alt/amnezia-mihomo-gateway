@@ -23,6 +23,7 @@ run ONLY on the target VPS, never on the development host.
 | `README.md` | Detailed RU documentation: architecture, Mihomo configuration, verification, troubleshooting |
 | `install.md` | Short RU installation guide; the heading "awg-warp-router" is the old project name |
 | `scripts/` | Reference templates of generated scripts with placeholders `<DOCKER_SUBNET>`, `<WG_PORT>`, `<HOST_INTERFACE>`; they are NOT executed and lag behind install.sh (see "Known inconsistencies") |
+| `tests/live/` | Disposable-VPS live-acceptance kit (orchestration/evidence/verification ONLY, no gateway logic): guarded destructive steps (`AMG_DISPOSABLE_TEST_HOST=YES` + `--confirm-disposable` + prior-state refusal + checkpoint/machine-id binding), downloads the PUBLIC stable installer with pinned SHA256, runs baseline → install → DDP proof → repeated install → reboot → uninstall → baseline-compare. `test-kit.sh` (fixture tests, no VPS/root needed) runs in CI. The kit never replaces or patches install.sh/uninstall.sh |
 | `systemd/` | Reference copies of the three units; they match the heredocs in install.sh |
 | `docs/LIVE_AUDIT_2026-09-23.md` | Live VPS evidence ledger and release gates for rollback/firewall work |
 | `LICENSE` | MIT |
@@ -48,8 +49,10 @@ and regression tests for the generated watchdog logic (including named/numeric r
    container by `name=amnezia-awg` (first match), Docker network (prefers a name containing `amnezia`),
    subnet, WG UDP port (`docker port`, fallback `docker inspect`), default interface.
 2. `/etc/sysctl.d/99-amnezia-mihomo.conf`: `rp_filter=0` (required for gvisor); BBR+fq
-   are added ONLY if congestion control is not already bbr; `ip_forward=1` only if disabled —
-   existing network hardening is not overwritten. Also disables rp_filter live on all interfaces.
+   and `ip_forward=1` are added only when needed on the initial install. If the installer
+   owns these changes (recorded markers), reinstall persists its directives even when the
+   live kernel values are already correct. Externally owned values are not claimed.
+   Also disables rp_filter live on all interfaces.
 3. Table `100 mihomo` in `/etc/iproute2/rt_tables` (if the entry does not exist). The installer records an ownership marker when it adds the entry.
 4. DNS: if systemd-resolved is active, disables it, writes `/etc/resolv.conf`
    (1.1.1.1 / 8.8.8.8), and applies `chattr +i`.
