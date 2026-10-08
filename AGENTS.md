@@ -60,8 +60,8 @@ and regression tests for the generated watchdog logic (including named/numeric r
 5. `/etc/docker/daemon.json` (DNS = docker0) — written ONLY if the file does not exist; an existing file is
    left untouched (Docker is restarted only in this branch). When the installer creates this file it records ownership,
    checksum and docker0 gateway in `/var/lib/amnezia-mihomo-gateway`.
-6. Auto-patches the Mihomo config: searches for `config.yaml` in `/etc/mihomo /opt/mihomo /root /home`
-   (maxdepth 3), creates backup `.bak.<epoch>`, stores the exact first pre-install config plus path/checksum metadata
+6. Candidate #20 binds one running Mihomo process to its actual config via read-only proc/systemd/Docker discovery
+   before installer state creation; unsupported/ambiguous/no-runtime layouts refuse. See `docs/RUNTIME_DISCOVERY_ACCEPTANCE.md`: Docker restart transitions are not yet integration-accepted. It creates backup `.bak.<epoch>`, stores the exact first pre-install config plus path/checksum metadata
    in `/var/lib/amnezia-mihomo-gateway`, then applies the Mihomo 1.19.31 contract only to the intended top-level
    `dns`, `tun`, `profile`, `find-process-mode` and `endpoint-independent-nat` paths. Nested listener/proxy keys
    are not rewritten. The patcher uses a same-directory temporary file, `flock`, preserves source metadata via

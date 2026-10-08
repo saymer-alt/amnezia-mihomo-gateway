@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Draft #20: runtime-bound config discovery, exact controller restart and identity guards; Docker restart transitions and live acceptance remain integration gates.
+
 ### Исправлено
 
 - #21 (частично): DNS/Docker ownership admission отказывается от неопределённых типов/state, DNS rollback проверяет snapshot до mutation и stages atomic restore. Ошибки attributes/service/readback сохраняют evidence/status 2. Изменения host/container DNS semantics и live acceptance остаются вне этого patch.

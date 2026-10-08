@@ -39,7 +39,7 @@ line_of() {
 }
 
 guard_line="$(line_of '/usr/local/sbin/warp-docker-routing.sh guard')"
-mihomo_line="$(line_of 'systemctl restart mihomo.service')"
+mihomo_line="$(line_of 'systemctl restart "$MIHOMO_CONTROLLER_ID"')"
 reload_line="$(line_of 'systemctl daemon-reload')"
 enable_line="$(line_of 'systemctl enable warp-docker-routing.service')"
 restart_line="$(line_of 'systemctl restart warp-docker-routing.service')"

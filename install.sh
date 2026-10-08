@@ -28,6 +28,199 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
+# BEGIN MIHOMO_RUNTIME_BINDING
+# Read-only admission runs before any installer/state writes. Python is explicit;
+# no file search or config-path default is a safe fallback.
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "Ошибка: runtime discovery требует python3; установка не начата." >&2
+    exit 1
+fi
+mihomo_runtime_binding() {
+    python3 - "$@" <<'PY_RUNTIME'
+"""Read-only runtime binding for the single-file installer; no YAML mutation here."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+
+PROC = Path('/proc')
+
+
+def refuse(message):
+    raise ValueError(message)
+
+
+def command(*args):
+    result = subprocess.run(args, capture_output=True, text=True, timeout=15, check=True)
+    return result.stdout.strip()
+
+
+def fingerprint(path):
+    before = path.stat()
+    if path.is_symlink() or not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        refuse('config must be a regular, single-link file')
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    after = path.stat()
+    fields = lambda s: [s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns]
+    if fields(before) != fields(after):
+        refuse('config changed during discovery')
+    return fields(after) + [digest]
+
+
+def process(pid):
+    directory = PROC / str(pid)
+    raw = (directory / 'cmdline').read_bytes()
+    argv = [v.decode('utf-8', errors='strict') for v in raw.rstrip(b'\0').split(b'\0')]
+    if not argv or not argv[0]:
+        refuse('empty runtime argv')
+    start = (directory / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+    exe = os.readlink(directory / 'exe')
+    cwd = os.readlink(directory / 'cwd')
+    root = os.readlink(directory / 'root')
+    environ = (directory / 'environ').read_bytes()
+    env = dict(item.split(b'=', 1) for item in environ.split(b'\0') if b'=' in item)
+    return {'pid': pid, 'start': start, 'argv': argv, 'exe': exe, 'cwd': cwd,
+            'root': root, 'env_hash': hashlib.sha256(environ).hexdigest()}, env
+
+
+def config_path(runtime, env):
+    strings = {'d', 'f', 'config', 'age-secret-key', 'ext-ui', 'ext-ctl', 'ext-ctl-tls',
+               'ext-ctl-unix', 'ext-ctl-pipe', 'ext-ctl-routing-mark', 'secret', 'post-up', 'post-down'}
+    booleans = {'m', 'v', 't'}
+    values = {}
+    args = iter(runtime['argv'][1:])
+    for arg in args:
+        if not arg.startswith('-') or arg == '--':
+            refuse('positional/unsupported runtime arguments')
+        key, separator, value = arg.lstrip('-').partition('=')
+        if key in values or key not in strings | booleans:
+            refuse('duplicate or unknown runtime flag')
+        if key in strings and not separator:
+            value = next(args, None)
+            if value is None or value.startswith('-'):
+                refuse('missing/ambiguous runtime flag value')
+        values[key] = value
+    if any(k in values for k in ('config', 'age-secret-key', 't', 'v')):
+        refuse('in-memory/encrypted/test/version runtime is unsupported')
+    if env.get(b'CLASH_CONFIG_STRING') or env.get(b'CLASH_CONFIG_FILE') or env.get(b'CLASH_HOME_DIR'):
+        refuse('environment-supplied config needs explicit acceptance; refusing to guess')
+    selected = values.get('f')
+    if selected == '-' or selected == '':
+        refuse('stdin/empty config path')
+    if selected is None:
+        home = values.get('d')
+        if not home:
+            refuse('explicit -f or -d is required; no default-path guessing')
+        selected = os.path.join(home, 'config.yaml')
+    return os.path.normpath(os.path.join(runtime['cwd'], selected))
+
+
+def discover():
+    candidates = []
+    for entry in PROC.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            executable = os.readlink(entry / 'exe')
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        if Path(executable).name == 'mihomo' or Path(executable).name.startswith('mihomo-'):
+            candidates.append(int(entry.name))
+    if len(candidates) != 1:
+        refuse('exactly one running Mihomo executable is required')
+    runtime, env = process(candidates[0])
+    result = subprocess.run(['systemctl', 'show', 'mihomo.service', '--property=MainPID,ActiveState,ExecStart,LoadState'], capture_output=True, text=True, timeout=15)
+    service = result.stdout.strip()
+    if result.returncode and 'LoadState=not-found' not in service.splitlines():
+        refuse('cannot establish systemd runtime identity')
+    properties = dict(line.split('=', 1) for line in service.splitlines() if '=' in line)
+    controllers = []
+    if properties.get('ActiveState') == 'active' and properties.get('MainPID') == str(runtime['pid']):
+        if runtime['root'] != '/':
+            refuse('systemd root/chroot layout is unsupported')
+        controllers.append({'kind': 'systemd', 'id': 'mihomo.service', 'metadata': service})
+    identifiers = command('docker', 'ps', '--no-trunc', '--format', '{{.ID}}').splitlines()
+    for identifier in identifiers:
+        inspected = json.loads(command('docker', 'inspect', identifier))
+        if len(inspected) != 1:
+            refuse('ambiguous Docker inspect')
+        container = inspected[0]
+        state = container.get('State', {})
+        if state.get('Running') and state.get('Pid') == runtime['pid']:
+            if container.get('Id') != identifier:
+                refuse('Docker identity mismatch')
+            if (container.get('Args') != runtime['argv'][1:] or
+                    Path(container.get('Path', '')).name != Path(runtime['argv'][0]).name):
+                refuse('Docker command/runtime argv mismatch')
+            controllers.append({'kind': 'docker', 'id': identifier,
+                                'metadata': {k: container.get(k) for k in ('Id', 'Path', 'Args', 'Mounts')} |
+                                {'State': {k: state.get(k) for k in ('Running', 'Pid', 'StartedAt')}}})
+    if len(controllers) != 1:
+        refuse('runtime must bind uniquely to active mihomo.service or Docker init PID')
+    controller = controllers[0]
+    selected = config_path(runtime, env)
+    host = Path(selected)
+    if controller['kind'] == 'docker':
+        matches = []
+        for mount in controller['metadata']['Mounts'] or []:
+            destination = mount.get('Destination', '').rstrip('/') or '/'
+            if selected == destination or selected.startswith(destination.rstrip('/') + '/'):
+                matches.append(mount)
+        if len(matches) != 1:
+            refuse('config needs exactly one unambiguous directory bind mount')
+        mount = matches[0]
+        source = Path(mount.get('Source', ''))
+        if mount.get('Type') != 'bind' or not mount.get('RW') or not source.is_dir():
+            refuse('read-only/volume/single-file bind mount cannot be safely atomically patched')
+        host = source / os.path.relpath(selected, mount['Destination'])
+        visible = PROC / str(runtime['pid']) / 'root' / selected.lstrip('/')
+        host_stat, visible_stat = host.stat(), visible.stat()
+        if (host_stat.st_dev, host_stat.st_ino) != (visible_stat.st_dev, visible_stat.st_ino):
+            refuse('bind mapping does not identify the runtime file')
+    if not host.is_absolute() or '\n' in str(host) or '\t' in str(host):
+        refuse('unsupported config path')
+    again, _ = process(runtime['pid'])
+    if again != runtime:
+        refuse('process changed during discovery')
+    resolved = host.resolve(strict=True)
+    if host.is_symlink():
+        refuse('config symlink is unsupported')
+    return {'runtime': runtime, 'controller': controller, 'path': str(host),
+            'resolved': str(resolved), 'file': fingerprint(host)}
+
+
+def main():
+    current = discover()
+    mode = sys.argv[1]
+    if mode in ('verify', 'runtime'):
+        expected = json.loads(sys.argv[2])
+        if mode == 'runtime':
+            current.pop('file'); expected.pop('file')
+        if current != expected:
+            refuse('runtime/config identity changed; refusing mutation/restart')
+    elif mode == 'discover':
+        print(json.dumps(current, sort_keys=True))
+    else:
+        refuse('unknown binding operation')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (ValueError, OSError, subprocess.SubprocessError, KeyError, IndexError, TypeError) as error:
+        print('amg-runtime: ' + str(error), file=sys.stderr)
+        sys.exit(1)
+PY_RUNTIME
+}
+MIHOMO_RUNTIME=$(mihomo_runtime_binding discover)
+MIHOMO_CONFIG=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["path"])' "$MIHOMO_RUNTIME")
+MIHOMO_CONTROLLER_KIND=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["controller"]["kind"])' "$MIHOMO_RUNTIME")
+MIHOMO_CONTROLLER_ID=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["controller"]["id"])' "$MIHOMO_RUNTIME")
+# END MIHOMO_RUNTIME_BINDING
+
 # 1. Автоопределение параметров
 echo -e "${YELLOW}[*] Поиск контейнера Amnezia AWG...${NC}"
 AWG_CONTAINER=$(docker ps --filter "name=amnezia-awg" --format "{{.Names}}" | head -n1)
@@ -64,6 +257,7 @@ TABLE_NAME="mihomo"
 FAKE_IP_RANGE="198.18.0.0/16"
 STATE_DIR="/var/lib/amnezia-mihomo-gateway"
 
+mihomo_runtime_binding verify "$MIHOMO_RUNTIME"
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 
@@ -240,7 +434,7 @@ fi
 
 # 2.7 Авто-патч config.yaml Mihomo (все проверенные оптимизации v2.0)
 echo -e "${YELLOW}[*] Поиск и патч config.yaml Mihomo...${NC}"
-MIHOMO_CONFIG=$(find /etc/mihomo /opt/mihomo /root /home -maxdepth 3 -name "config.yaml" 2>/dev/null | head -n1)
+mihomo_runtime_binding verify "$MIHOMO_RUNTIME"
 if [ -n "$MIHOMO_CONFIG" ]; then
     echo -e "${GREEN}    Найден конфиг: $MIHOMO_CONFIG${NC}"
 
@@ -557,6 +751,11 @@ if [ -n "$MIHOMO_CONFIG" ]; then
                 echo -e "${YELLOW}    -> WARN: локальный бинарник mihomo не найден; syntax validation будет выполнена на live acceptance.${NC}"
             fi
 
+            # Fixtures can extract the patcher alone. Product execution always
+            # has the original read-only runtime binding and checks it again.
+            if [ -n "${MIHOMO_RUNTIME:-}" ]; then
+                mihomo_runtime_binding verify "$MIHOMO_RUNTIME" || exit 1
+            fi
             # Same-directory rename is atomic on the target filesystem.
             mv -f -- "$tmp" "$config"
             tmp=""
@@ -773,13 +972,11 @@ routing_ok() {
 
 if ! ip link show "\$PROXY_IF" >/dev/null 2>&1; then
     logger "warp-check: Интерфейс \$PROXY_IF отсутствует. Пытаюсь перезапустить Mihomo..."
-    if systemctl list-unit-files | grep -q "^mihomo.service"; then
-        systemctl restart mihomo.service
-    elif command -v docker >/dev/null 2>&1; then
-        MIHOMO_C=\$(docker ps -a --format '{{.Names}}' | grep "mihomo" | head -n1)
-        if [ -n "\$MIHOMO_C" ]; then
-            docker restart "\$MIHOMO_C"
-        fi
+    # Exact controller chosen by installer runtime admission; never first-name matching.
+    if [ "$MIHOMO_CONTROLLER_KIND" = systemd ]; then
+        systemctl restart "$MIHOMO_CONTROLLER_ID"
+    else
+        docker restart "$MIHOMO_CONTROLLER_ID"
     fi
     for i in \$(seq 1 10); do
         if ip link show "\$PROXY_IF" >/dev/null 2>&1; then break; fi
@@ -836,13 +1033,11 @@ echo -e "${YELLOW}[*] Установка fail-secure guard...${NC}"
 
 # 6. Перезапуск Mihomo
 echo -e "${YELLOW}[*] Перезапуск Mihomo...${NC}"
-if systemctl list-unit-files | grep -q "^mihomo.service"; then
-    systemctl restart mihomo.service
-elif command -v docker >/dev/null 2>&1; then
-    MIHOMO_C=$(docker ps -a --format '{{.Names}}' | grep "mihomo" | head -n1)
-    if [ -n "$MIHOMO_C" ]; then
-        docker restart "$MIHOMO_C"
-    fi
+mihomo_runtime_binding runtime "$MIHOMO_RUNTIME"
+if [ "$MIHOMO_CONTROLLER_KIND" = systemd ]; then
+    systemctl restart "$MIHOMO_CONTROLLER_ID"
+else
+    docker restart "$MIHOMO_CONTROLLER_ID"
 fi
 sleep 5
 
