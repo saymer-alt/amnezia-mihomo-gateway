@@ -4,6 +4,7 @@
 
 ### Исправлено
 
+- #21 (частично): DNS/Docker ownership admission отказывается от неопределённых типов/state, DNS rollback проверяет snapshot до mutation и stages atomic restore. Ошибки attributes/service/readback сохраняют evidence/status 2. Изменения host/container DNS semantics и live acceptance остаются вне этого patch.
 - #31 (частично): read-only `doctor.sh` показывает runtime rp_filter для all/default/interfaces и потенциально конфликтующие persistent directives, включая wildcard/slash keys. Не выполняет reload и не меняет чужие файлы; историческая причина инцидента остаётся неподтверждённой.
 - #32: `tun.disable-icmp-forwarding` располагается перед trailing-комментариями следующей YAML-секции, включая ранее неверно размещённый ключ. Сохранены comments, block-scalar data и идемпотентность повторного патча; добавлены regressions.
 
