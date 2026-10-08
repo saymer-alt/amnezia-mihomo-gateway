@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -16,19 +17,49 @@ def namespace(kind):
     return os.readlink('/proc/self/ns/' + kind)
 
 
-def admit(parent_net, parent_user, parent_mount):
-    if (namespace('net') == parent_net or namespace('user') == parent_user or
-            namespace('mnt') == parent_mount):
-        raise RuntimeError('refusing: private network, user AND mount namespaces are required')
+def parent_namespace(pid, kind):
+    return os.readlink('/proc/' + str(pid) + '/ns/' + kind)
+
+
+def admit(launcher_pid):
+    # CLI-provided namespace labels are not authority. Read the real direct
+    # parent's namespaces and independently verify the process relationship.
+    if launcher_pid < 2 or os.getppid() != launcher_pid:
+        raise RuntimeError('refusing: launcher must be the actual direct parent')
+    for kind in ('net', 'user', 'mnt'):
+        if namespace(kind) == parent_namespace(launcher_pid, kind):
+            raise RuntimeError('refusing: private network, user AND mount namespaces are required')
 
 
 def run(*args):
     return subprocess.run(args, text=True, capture_output=True, check=True, timeout=15).stdout.strip()
 
 
-def inside(parent_net, parent_user, parent_mount, iptables):
+def delivery_result(output, label):
+    event = json.loads(output)
+    if event == {'received': False}:
+        return False
+    if event == {'received': True, 'payload': label}:
+        return True
+    raise AssertionError('unexpected receiver event/payload; never negative proof')
+
+
+def launch_isolated(args):
+    process = subprocess.Popen(args, start_new_session=True)
+    try:
+        return process.wait(timeout=90)
+    except BaseException:
+        # A dedicated session/group contains only this experiment's descendants.
+        # Kill all of them on timeout/interruption so private namespaces cannot linger.
+        try: os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError: pass
+        process.wait()
+        raise
+
+
+def inside(launcher_pid, iptables):
     # No mutation may precede this barrier. Nested nodes stay inside this private netns tree.
-    admit(parent_net, parent_user, parent_mount)
+    admit(int(launcher_pid))
     # Prevent xtables lock-file creation in the caller's /run; no propagation.
     run('mount', '--make-rprivate', '/')
     run('mount', '-t', 'tmpfs', 'tmpfs', '/run')
@@ -75,7 +106,7 @@ def inside(parent_net, parent_user, parent_mount, iptables):
             if narrow: args += ['-m', 'physdev', '--physdev-in', 'awg-r']
             rule(*args, '-j', 'MARK', '--set-mark', '0x88')
         def probe(label, sender, expected, endpoint='172.20.0.2', source=''):
-            receiver = "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('" + endpoint + "',54321)); s.settimeout(1); print('READY',flush=True);\ntry: print(s.recv(256).decode(),flush=True)\nexcept socket.timeout: print('BLOCKED',flush=True)"
+            receiver = "import socket,json; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('" + endpoint + "',54321)); s.settimeout(1); print('READY',flush=True);\ntry: print(json.dumps({'received':True,'payload':s.recv(256).decode()}),flush=True)\nexcept socket.timeout: print(json.dumps({'received':False}),flush=True)"
             listener = subprocess.Popen(['nsenter', '-t', str(wan), '-n', sys.executable, '-c', receiver], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if listener.stdout.readline().strip() != 'READY':
                 listener.kill(); listener.communicate(); raise RuntimeError('receiver setup failed')
@@ -85,7 +116,7 @@ def inside(parent_net, parent_user, parent_mount, iptables):
             finally:
                 if listener.poll() is None: listener.kill(); listener.communicate()
             if listener.returncode: raise RuntimeError('receiver failed: ' + errors)
-            delivered = output.strip() == label
+            delivered = delivery_result(output.strip(), label)
             report['probes'].append({'name': label, 'delivered': delivered, 'expected': expected})
             if delivered != expected: raise AssertionError(label + ': unexpected delivery')
         classifier(False)
@@ -117,7 +148,7 @@ def inside(parent_net, parent_user, parent_mount, iptables):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-isolated', action='store_true')
-    parser.add_argument('--inside', nargs=4, metavar=('PARENT_NET', 'PARENT_USER', 'PARENT_MOUNT', 'IPTABLES'))
+    parser.add_argument('--inside', nargs=2, metavar=('LAUNCHER_PID', 'IPTABLES'))
     parser.add_argument('--hold', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.hold:
@@ -134,9 +165,9 @@ def main():
         print('SKIP: missing iptables; no host packages are installed'); sys.exit(77)
     # Launcher does not call ip/iptables/sysctl. Even overridden binary executes only
     # after child admission proves a different private network AND user namespace.
-    result = subprocess.run(['unshare', '--user', '--map-root-user', '--net', '--mount', sys.executable,
-                             str(HERE), '--inside', namespace('net'), namespace('user'), namespace('mnt'), iptables], timeout=90)
-    sys.exit(result.returncode)
+    result = launch_isolated(['unshare', '--user', '--map-root-user', '--net', '--mount', sys.executable,
+                             str(HERE), '--inside', str(os.getpid()), iptables])
+    sys.exit(result)
 
 
 if __name__ == '__main__':
