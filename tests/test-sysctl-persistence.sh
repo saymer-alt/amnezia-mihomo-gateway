@@ -152,4 +152,20 @@ assert_live net.ipv4.ip_forward 1
   fail 'original congestion control was overwritten'
 echo 'PASS: drift does not replace first-install baseline'
 
+for owned in default_qdisc tcp_congestion_control; do
+    prepare "partial-$owned"
+    live net.core.default_qdisc fq
+    live net.ipv4.tcp_congestion_control bbr
+    live net.ipv4.ip_forward 1
+    : > "$STATE_DIR/sysctl_changed_$owned"
+    run_block
+    if [[ "$owned" == default_qdisc ]]; then
+        assert_directive 'net.core.default_qdisc = fq' 1
+        assert_directive 'net.ipv4.tcp_congestion_control = bbr' 0
+    else
+        assert_directive 'net.core.default_qdisc = fq' 0
+        assert_directive 'net.ipv4.tcp_congestion_control = bbr' 1
+    fi
+done
+echo 'PASS: a single ownership marker never admits its external companion'
 echo 'All AMG-01 sysctl persistence regression tests passed.'

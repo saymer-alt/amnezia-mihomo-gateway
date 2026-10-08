@@ -103,12 +103,7 @@ EOF
 CURRENT_CC=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "")
 # Existing ownership markers survive reinstall: runtime values alone cannot prove
 # persistence across a reboot. Do not claim ownership if BBR was already external.
-if [ -f "$STATE_DIR/sysctl_changed_default_qdisc" ] ||
-   [ -f "$STATE_DIR/sysctl_changed_tcp_congestion_control" ]; then
-    echo "net.core.default_qdisc = fq" >> "$SYSCTL_FILE"
-    echo "net.ipv4.tcp_congestion_control = bbr" >> "$SYSCTL_FILE"
-    echo -e "${CYAN}    -> BBR/fq сохранены как installer-owned persistent sysctl.${NC}"
-elif [ "$CURRENT_CC" != "bbr" ]; then
+if [ "$CURRENT_CC" != "bbr" ]; then
     : > "$STATE_DIR/sysctl_changed_default_qdisc"
     : > "$STATE_DIR/sysctl_changed_tcp_congestion_control"
     echo "net.core.default_qdisc = fq" >> "$SYSCTL_FILE"
@@ -116,6 +111,15 @@ elif [ "$CURRENT_CC" != "bbr" ]; then
     echo -e "${CYAN}    -> BBR добавлен.${NC}"
 else
     echo -e "${CYAN}    -> BBR уже активен извне, пропускаем.${NC}"
+fi
+# Each directive requires its own marker, including partially recorded state.
+if [ -f "$STATE_DIR/sysctl_changed_default_qdisc" ] &&
+   ! grep -q '^net.core.default_qdisc = fq$' "$SYSCTL_FILE"; then
+    echo "net.core.default_qdisc = fq" >> "$SYSCTL_FILE"
+fi
+if [ -f "$STATE_DIR/sysctl_changed_tcp_congestion_control" ] &&
+   ! grep -q '^net.ipv4.tcp_congestion_control = bbr$' "$SYSCTL_FILE"; then
+    echo "net.ipv4.tcp_congestion_control = bbr" >> "$SYSCTL_FILE"
 fi
 
 CURRENT_IPF=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "0")
