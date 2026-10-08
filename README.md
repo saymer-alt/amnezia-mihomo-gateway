@@ -78,6 +78,22 @@
 
 ---
 
+## Read-only диагностика rp_filter (development)
+
+В checkout ветки main можно выполнить `bash doctor.sh` без root. Команда только
+читает runtime `/proc/sys/net/ipv4/conf/*/rp_filter` и persistent sysctl declarations:
+выводит конфликтующие all/default/interface значения, wildcard/slash keys и UNKNOWN
+для недоступных данных. Exit 0 — наблюдаемых предупреждений нет; 1 — WARN/UNKNOWN;
+2 — неверные аргументы. `AMG_DIAGNOSTIC_ROOT` задаёт корень fixture-дерева для тестов.
+
+Это диагностическая возможность main, ещё не опубликованная в stable v2.0.1.
+Doctor не вычисляет итоговый boot precedence/masks: найденный directive может быть
+перекрыт другим файлом, но опасен при ручном whole-file reload. Он не вызывает
+sysctl/reload, не правит внешний config и не доказывает причину исторического AWG
+инцидента #31. Перед maintenance сопоставьте runtime all/default/interfaces с
+project fragment и согласуйте конфликтующие внешние настройки с администратором;
+не выполняйте слепой `sysctl -p /etc/sysctl.conf`.
+
 ## Быстрая установка
 
 Для обычной установки используйте ветку `stable`. Ветка `main` — интеграционная: изменения сначала проходят CI и проверку, а затем отдельным PR продвигаются в `stable`.
