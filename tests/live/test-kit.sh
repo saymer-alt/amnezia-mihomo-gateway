@@ -51,11 +51,16 @@ for s in "$KIT_DIR"/*.sh; do
   fi
 done
 
-# Pins must identify the product blobs shipped with this acceptance kit.
-# This reads local files only; it never invokes either installer.
+# Pins identify the immutable production baseline, not development main.
+# This reads Git blobs only; it never invokes either installer or a network fetch.
+baseline="$(bash -c '. "$1/lib.sh"; printf "%s" "$AMG_PRODUCT_COMMIT"' _ "$KIT_DIR")"
 for product in install uninstall; do
   expected="$(bash -c '. "$1/lib.sh"; case "$2" in install) printf "%s" "$EXPECTED_INSTALL_SHA256";; uninstall) printf "%s" "$EXPECTED_UNINSTALL_SHA256";; esac' _ "$KIT_DIR" "$product")"
-  actual="$(sha256sum "$KIT_DIR/../../$product.sh")"
+  if ! git -C "$KIT_DIR/../.." show "$baseline:$product.sh" > "$TMP/pinned-$product.sh"; then
+    fail "$product production baseline blob unavailable"
+    continue
+  fi
+  actual="$(sha256sum "$TMP/pinned-$product.sh")"
   actual="${actual%% *}"
   if [ "$actual" = "$expected" ]; then
     pass "$product acceptance pin matches product blob"
