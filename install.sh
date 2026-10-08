@@ -145,33 +145,72 @@ fi
 
 # 2.6 DNS: ownership state записывается ДО изменения systemd-resolved/resolv.conf.
 echo -e "${YELLOW}[*] Настройка DNS...${NC}"
+RESOLV_CONF="/etc/resolv.conf"
+DOCKER_DAEMON_FILE="/etc/docker/daemon.json"
+if [ ! -f "$STATE_DIR/dns_state_recorded" ] &&
+   { [ -e "$STATE_DIR/resolv.conf.original" ] || [ -L "$STATE_DIR/resolv.conf.original" ] ||
+     [ -f "$STATE_DIR/resolved_was_active" ] || [ -f "$STATE_DIR/resolved_was_enabled" ] ||
+     [ -f "$STATE_DIR/resolv_original_missing" ] || [ -f "$STATE_DIR/resolv_original_immutable" ]; }; then
+    echo -e "${RED}Ошибка: DNS snapshot/state неполон; требуется ручная проверка до повторной установки.${NC}" >&2
+    exit 1
+fi
 if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    if [ -f "$STATE_DIR/dns_state_recorded" ]; then
+        echo -e "${RED}Ошибка: systemd-resolved снова активен после managed install; DNS state мог изменить администратор. Автоматическая повторная запись запрещена.${NC}" >&2
+        exit 1
+    fi
     if [ ! -f "$STATE_DIR/dns_state_recorded" ]; then
-        : > "$STATE_DIR/resolved_was_active"
-        if systemctl is-enabled --quiet systemd-resolved 2>/dev/null; then
-            : > "$STATE_DIR/resolved_was_enabled"
-        fi
-        if [ -e /etc/resolv.conf ] || [ -L /etc/resolv.conf ]; then
-            cp -a --no-dereference -- /etc/resolv.conf "$STATE_DIR/resolv.conf.original"
-            if lsattr -d /etc/resolv.conf 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
+        ORIGINAL_RESOLVED_ENABLED=$(systemctl is-enabled systemd-resolved 2>/dev/null || true)
+        case "$ORIGINAL_RESOLVED_ENABLED" in enabled|disabled) :;;
+            *) echo -e "${RED}Ошибка: enabled-state systemd-resolved не поддержан/не доказан; DNS не изменён.${NC}" >&2; exit 1;;
+        esac
+        if [ -e "$RESOLV_CONF" ] || [ -L "$RESOLV_CONF" ]; then
+            if [ ! -L "$RESOLV_CONF" ] && [ ! -f "$RESOLV_CONF" ]; then
+                echo -e "${RED}Ошибка: неподдерживаемый тип resolv.conf; DNS не изменён.${NC}" >&2
+                exit 1
+            fi
+            ORIGINAL_RESOLV_ATTRS=""
+            if [ ! -L "$RESOLV_CONF" ]; then
+                if ! ORIGINAL_RESOLV_ATTRS=$(lsattr -d "$RESOLV_CONF" 2>/dev/null); then
+                    echo -e "${RED}Ошибка: immutable-state resolv.conf не доказан; DNS не изменён.${NC}" >&2
+                    exit 1
+                fi
+                if [ -z "$(printf '%s\n' "$ORIGINAL_RESOLV_ATTRS" | awk '{print $1}')" ]; then
+                    echo -e "${RED}Ошибка: пустой immutable-state resolv.conf; DNS не изменён.${NC}" >&2
+                    exit 1
+                fi
+            fi
+            cp -a --no-dereference -- "$RESOLV_CONF" "$STATE_DIR/resolv.conf.original"
+            if printf '%s\n' "$ORIGINAL_RESOLV_ATTRS" | awk '{print $1}' | grep -q 'i'; then
                 : > "$STATE_DIR/resolv_original_immutable"
             fi
         else
             : > "$STATE_DIR/resolv_original_missing"
         fi
+        : > "$STATE_DIR/resolved_was_active"
+        if [ "$ORIGINAL_RESOLVED_ENABLED" = enabled ]; then
+            : > "$STATE_DIR/resolved_was_enabled"
+        fi
         : > "$STATE_DIR/dns_state_recorded"
     fi
 
-    systemctl disable --now systemd-resolved 2>/dev/null || true
-    chattr -i /etc/resolv.conf 2>/dev/null || true
-    rm -f /etc/resolv.conf
-    cat << 'EOF' > /etc/resolv.conf
+    if ! systemctl disable --now systemd-resolved ||
+       [ "$(systemctl show systemd-resolved --property=ActiveState --value)" != inactive ] ||
+       [ "$(systemctl is-enabled systemd-resolved 2>/dev/null || true)" != disabled ]; then
+        echo -e "${RED}Ошибка: отключение systemd-resolved не подтверждено; resolv.conf не изменён.${NC}" >&2
+        exit 1
+    fi
+    if [ ! -L "$RESOLV_CONF" ] && [ -e "$RESOLV_CONF" ]; then
+        chattr -i "$RESOLV_CONF"
+    fi
+    rm -f -- "$RESOLV_CONF"
+    cat << 'EOF' > "$RESOLV_CONF"
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 options timeout:2 attempts:3
 EOF
-    chattr +i /etc/resolv.conf
-    sha256sum /etc/resolv.conf | awk '{print $1}' > "$STATE_DIR/resolv_managed_sha256"
+    chattr +i "$RESOLV_CONF"
+    sha256sum "$RESOLV_CONF" | awk '{print $1}' > "$STATE_DIR/resolv_managed_sha256"
     echo -e "${CYAN}    -> systemd-resolved отключён; исходная семантика resolv.conf сохранена.${NC}"
 else
     echo -e "${CYAN}    -> systemd-resolved уже отключён, DNS state не присваиваем.${NC}"
@@ -179,14 +218,18 @@ fi
 
 DOCKER_GW=$(ip -4 addr show docker0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
 if [ -n "$DOCKER_GW" ]; then
-    if [ ! -f /etc/docker/daemon.json ]; then
-        cat << EOF > /etc/docker/daemon.json
+    if [ ! -e "$DOCKER_DAEMON_FILE" ] && [ ! -L "$DOCKER_DAEMON_FILE" ]; then
+        if [ -f "$STATE_DIR/docker_daemon_created" ]; then
+            echo -e "${RED}Ошибка: ранее owned daemon.json отсутствует; автоматическое повторное присвоение запрещено.${NC}" >&2
+            exit 1
+        fi
+        cat << EOF > "$DOCKER_DAEMON_FILE"
 {
   "dns": ["$DOCKER_GW"]
 }
 EOF
         : > "$STATE_DIR/docker_daemon_created"
-        sha256sum /etc/docker/daemon.json | awk '{print $1}' > "$STATE_DIR/docker_daemon_sha256"
+        sha256sum "$DOCKER_DAEMON_FILE" | awk '{print $1}' > "$STATE_DIR/docker_daemon_sha256"
         printf '%s\n' "$DOCKER_GW" > "$STATE_DIR/docker_dns_gateway"
         systemctl restart docker
         echo -e "${CYAN}    -> Docker DNS настроен; ownership-state сохранён.${NC}"

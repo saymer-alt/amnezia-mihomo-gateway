@@ -43,7 +43,11 @@ fi
 # 2. Docker daemon.json: удаляем только доказанно installer-owned файл и только без admin divergence.
 DOCKER_RESTART_NEEDED=0
 if [ -f "$STATE_DIR/docker_daemon_created" ]; then
-    if [ ! -e "$DOCKER_DAEMON_FILE" ]; then
+    if [ -L "$DOCKER_DAEMON_FILE" ] ||
+       { [ -e "$DOCKER_DAEMON_FILE" ] &&
+         { [ ! -f "$DOCKER_DAEMON_FILE" ] || [ "$(stat -c '%h' -- "$DOCKER_DAEMON_FILE" 2>/dev/null)" != 1 ]; }; }; then
+        warn_incomplete "Docker daemon.json изменил тип/identity; оставляю без изменений."
+    elif [ ! -e "$DOCKER_DAEMON_FILE" ]; then
         :
     elif [ -f "$STATE_DIR/docker_daemon_sha256" ]; then
         EXPECTED_SHA=$(cat "$STATE_DIR/docker_daemon_sha256" 2>/dev/null || true)
@@ -148,6 +152,10 @@ if [ -f "$STATE_DIR/dns_state_recorded" ]; then
     if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
         DNS_SAFE=0
     fi
+    if [ "$(systemctl show systemd-resolved --property=ActiveState --value 2>/dev/null)" != inactive ] ||
+       [ "$(systemctl is-enabled systemd-resolved 2>/dev/null || true)" != disabled ]; then
+        DNS_SAFE=0
+    fi
     if [ ! -f "$STATE_DIR/resolv_managed_sha256" ] || [ ! -f "$RESOLV_CONF" ] || [ -L "$RESOLV_CONF" ]; then
         DNS_SAFE=0
     else
@@ -156,34 +164,83 @@ if [ -f "$STATE_DIR/dns_state_recorded" ]; then
         if [ -z "$EXPECTED_RESOLV_SHA" ] || [ "$CURRENT_RESOLV_SHA" != "$EXPECTED_RESOLV_SHA" ]; then
             DNS_SAFE=0
         fi
+        CURRENT_RESOLV_ATTRS=$(lsattr -d "$RESOLV_CONF" 2>/dev/null | awk '{print $1}')
+        if [ "$(stat -c '%h' -- "$RESOLV_CONF" 2>/dev/null)" != 1 ] ||
+           ! printf '%s\n' "$CURRENT_RESOLV_ATTRS" | grep -q i; then
+            DNS_SAFE=0
+        fi
+    fi
+
+    # Prove exactly one supported original-state form BEFORE any DNS mutation.
+    ORIGINAL_RESOLV="$STATE_DIR/resolv.conf.original"
+    if [ -f "$STATE_DIR/resolv_original_missing" ]; then
+        if [ -e "$ORIGINAL_RESOLV" ] || [ -L "$ORIGINAL_RESOLV" ] ||
+           [ -f "$STATE_DIR/resolv_original_immutable" ]; then DNS_SAFE=0; fi
+    elif [ -L "$ORIGINAL_RESOLV" ]; then
+        if [ -f "$STATE_DIR/resolv_original_immutable" ]; then DNS_SAFE=0; fi
+    elif [ ! -f "$ORIGINAL_RESOLV" ]; then
+        DNS_SAFE=0
     fi
 
     if [ "$DNS_SAFE" -eq 1 ]; then
-        chattr -i "$RESOLV_CONF" 2>/dev/null || true
-        rm -f -- "$RESOLV_CONF"
-
-        if [ -e "$STATE_DIR/resolv.conf.original" ] || [ -L "$STATE_DIR/resolv.conf.original" ]; then
-            cp -a --no-dereference -- "$STATE_DIR/resolv.conf.original" "$RESOLV_CONF"
-            if [ -f "$STATE_DIR/resolv_original_immutable" ]; then
-                chattr +i "$RESOLV_CONF" 2>/dev/null || true
+        # Stage the original before clearing immutable. Atomic rename keeps the
+        # managed resolver available if snapshot copy fails. Subshell owns trap.
+        restore_owned_dns() (
+            TMP_RESOLV=""
+            trap 'rm -f -- "${TMP_RESOLV:-}"' EXIT HUP INT TERM
+            if [ ! -f "$STATE_DIR/resolv_original_missing" ]; then
+                TMP_RESOLV=$(mktemp "$(dirname -- "$RESOLV_CONF")/.resolv.amg-rollback.XXXXXX") || return 1
+                cp -a --no-dereference --remove-destination -- "$ORIGINAL_RESOLV" "$TMP_RESOLV" || return 1
             fi
-        elif [ ! -f "$STATE_DIR/resolv_original_missing" ]; then
-            warn_incomplete "Не удалось доказать исходную семантику resolv.conf; DNS state сохранён."
-        fi
+            # Staging must not widen the admission window for an admin edit.
+            [ -f "$RESOLV_CONF" ] && [ ! -L "$RESOLV_CONF" ] || return 1
+            [ "$(stat -c '%h' -- "$RESOLV_CONF" 2>/dev/null)" = 1 ] || return 1
+            [ "$(sha256sum "$RESOLV_CONF" | awk '{print $1}')" = "$EXPECTED_RESOLV_SHA" ] || return 1
+            [ "$(systemctl show systemd-resolved --property=ActiveState --value)" = inactive ] || return 1
+            [ "$(systemctl is-enabled systemd-resolved 2>/dev/null || true)" = disabled ] || return 1
+            chattr -i "$RESOLV_CONF" || return 1
+            if [ -f "$STATE_DIR/resolv_original_missing" ]; then
+                rm -f -- "$RESOLV_CONF" || return 1
+            else
+                mv -Tf -- "$TMP_RESOLV" "$RESOLV_CONF" || return 1
+                TMP_RESOLV=""
+            fi
+            if [ -f "$STATE_DIR/resolv_original_immutable" ]; then
+                chattr +i "$RESOLV_CONF" || return 1
+            fi
+            if [ -f "$RESOLV_CONF" ] && [ ! -L "$RESOLV_CONF" ]; then
+                RESTORED_ATTRS=$(lsattr -d "$RESOLV_CONF" 2>/dev/null) || return 1
+                RESTORED_FLAGS=$(printf '%s\n' "$RESTORED_ATTRS" | awk '{print $1}')
+                [ -n "$RESTORED_FLAGS" ] || return 1
+                if [ -f "$STATE_DIR/resolv_original_immutable" ]; then
+                    printf '%s\n' "$RESTORED_FLAGS" | grep -q i || return 1
+                elif printf '%s\n' "$RESTORED_FLAGS" | grep -q i; then
+                    return 1
+                fi
+            fi
 
-        if [ -f "$STATE_DIR/resolved_was_enabled" ]; then
-            systemctl enable systemd-resolved 2>/dev/null || warn_incomplete "Не удалось вернуть enabled-state systemd-resolved."
+            if [ -f "$STATE_DIR/resolved_was_enabled" ]; then
+                systemctl enable systemd-resolved || return 1
+                [ "$(systemctl is-enabled systemd-resolved 2>/dev/null || true)" = enabled ] || return 1
+            else
+                systemctl disable systemd-resolved || return 1
+                [ "$(systemctl is-enabled systemd-resolved 2>/dev/null || true)" = disabled ] || return 1
+            fi
+            if [ -f "$STATE_DIR/resolved_was_active" ]; then
+                systemctl start systemd-resolved || return 1
+                [ "$(systemctl show systemd-resolved --property=ActiveState --value)" = active ] || return 1
+            else
+                systemctl stop systemd-resolved || return 1
+                [ "$(systemctl show systemd-resolved --property=ActiveState --value)" = inactive ] || return 1
+            fi
+        )
+        if restore_owned_dns; then
+            echo -e "${GREEN}systemd-resolved/resolv.conf восстановлены по pre-install state.${NC}"
         else
-            systemctl disable systemd-resolved 2>/dev/null || true
+            warn_incomplete "DNS restore завершился с ошибкой; state/snapshot сохранены для ручной проверки."
         fi
-        if [ -f "$STATE_DIR/resolved_was_active" ]; then
-            systemctl start systemd-resolved 2>/dev/null || warn_incomplete "Не удалось запустить исходно активный systemd-resolved."
-        else
-            systemctl stop systemd-resolved 2>/dev/null || true
-        fi
-        echo -e "${GREEN}systemd-resolved/resolv.conf восстановлены по pre-install state.${NC}"
     else
-        warn_incomplete "DNS state изменён после установки; systemd-resolved/resolv.conf оставлены без изменений."
+        warn_incomplete "DNS state изменён/не доказан или snapshot неполон; systemd-resolved/resolv.conf оставлены без изменений."
     fi
 fi
 
