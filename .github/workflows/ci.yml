@@ -69,6 +69,12 @@ jobs:
           set -euo pipefail
           bash tests/test-watchdog.sh
 
+      - name: Sysctl reinstall persistence regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/test-sysctl-persistence.sh
+
       - name: Ownership rollback regression tests
         shell: bash
         run: |
