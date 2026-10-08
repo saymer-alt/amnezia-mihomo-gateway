@@ -17,7 +17,7 @@ AMG_RT_TABLES_FILE="${AMG_RT_TABLES_FILE:-/etc/iproute2/rt_tables}"
 # If stable ever moves, these pins make the kit REFUSE: re-pin only after an
 # independent re-audit of the new stable blob (git show origin/stable:...).
 AMG_RAW_BASE="https://raw.githubusercontent.com/saymer-alt/amnezia-mihomo-gateway/stable"
-EXPECTED_INSTALL_SHA256="6e88c5f6fb9c71cd63e3587cf157384334b7f229ae54146c2a1dddd581253a65"
+EXPECTED_INSTALL_SHA256="71fd217aba7411abe4388d18eb6ddfb3051d9188258f479bd5c7a0a4271101b8"
 EXPECTED_UNINSTALL_SHA256="a4e0de5364ed7ecec603d24683ca81f864920cb4c6840598c01eaa819f081fcd"
 
 AWG_CONTAINER_PREFIX="amnezia-awg"
