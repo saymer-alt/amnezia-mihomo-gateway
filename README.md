@@ -76,6 +76,8 @@
 - **Mihomo (Clash Meta):** Запущен как `mihomo.service` или Docker-контейнер; в конфиге включён TUN-интерфейс `tun-mihomo`
 - **Root:** Скрипт запускается от root
 
+> Конфиг Mihomo с TUN для этого сценария можно собрать в веб-генераторе [Mihomo Unified Generator](https://saymer-alt.github.io/link-generators/): профиль развёртывания «VPS Transparent Gateway» создаёт совместимый TUN-блок (`tun-mihomo`, `auto-route: false`) автоматически. Подробности — [docs/VPS-GATEWAY.md](https://github.com/saymer-alt/link-generators/blob/main/docs/VPS-GATEWAY.md).
+
 ---
 
 ## Read-only диагностика rp_filter (development)
