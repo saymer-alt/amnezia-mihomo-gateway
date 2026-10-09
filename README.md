@@ -2,7 +2,7 @@
 
 Автоматизированная настройка маршрутизации Docker-контейнера **AmneziaAWG** через TUN-интерфейс **Mihomo** (Clash Meta) с выходом в интернет через **Cloudflare WARP**.
 
-> **EN:** Route AmneziaWG (Docker) client traffic through a Mihomo TUN so egress uses Cloudflare WARP and the real VPS IP stays hidden.
+> **EN:** Route AmneziaWG (Docker) client traffic through a Mihomo TUN so egress exits via Cloudflare WARP: destination sites see WARP IPs, not the VPS IP. VPN clients still know the VPS IP as their tunnel endpoint.
 
 **Задача:** клиенты подключаются к твоему серверу по AmneziaWG, но в интернет выходят с IP-адреса Cloudflare WARP — твой реальный IP сервера остаётся скрытым.
 
@@ -103,8 +103,15 @@ chmod +x install.sh
 Если файл уже скачан командой из «Быстрой установки»:
 
 ```bash
-chmod +x install.sh uninstall.sh
+chmod +x install.sh
 sudo ./install.sh
+```
+
+`uninstall.sh` в быструю установку не входит; если он понадобится для будущего удаления, скачайте его тем же способом из ветки `stable`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/saymer-alt/amnezia-mihomo-gateway/stable/uninstall.sh -o uninstall.sh
+chmod +x uninstall.sh
 ```
 
 Скрипт автоматически:
