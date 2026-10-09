@@ -1,8 +1,8 @@
-
-
 # amnezia-mihomo-gateway
 
 Автоматизированная настройка маршрутизации Docker-контейнера **AmneziaAWG** через TUN-интерфейс **Mihomo** (Clash Meta) с выходом в интернет через **Cloudflare WARP**.
+
+> **EN:** Route AmneziaWG (Docker) client traffic through a Mihomo TUN so egress uses Cloudflare WARP and the real VPS IP stays hidden.
 
 **Задача:** клиенты подключаются к твоему серверу по AmneziaWG, но в интернет выходят с IP-адреса Cloudflare WARP — твой реальный IP сервера остаётся скрытым.
 
@@ -78,22 +78,6 @@
 
 ---
 
-## Read-only диагностика rp_filter (development)
-
-В checkout ветки main можно выполнить `bash doctor.sh` без root. Команда только
-читает runtime `/proc/sys/net/ipv4/conf/*/rp_filter` и persistent sysctl declarations:
-выводит конфликтующие all/default/interface значения, wildcard/slash keys и UNKNOWN
-для недоступных данных. Exit 0 — наблюдаемых предупреждений нет; 1 — WARN/UNKNOWN;
-2 — неверные аргументы. `AMG_DIAGNOSTIC_ROOT` задаёт корень fixture-дерева для тестов.
-
-Это диагностическая возможность main, ещё не опубликованная в stable v2.0.1.
-Doctor не вычисляет итоговый boot precedence/masks: найденный directive может быть
-перекрыт другим файлом, но опасен при ручном whole-file reload. Он не вызывает
-sysctl/reload, не правит внешний config и не доказывает причину исторического AWG
-инцидента #31. Перед maintenance сопоставьте runtime all/default/interfaces с
-project fragment и согласуйте конфликтующие внешние настройки с администратором;
-не выполняйте слепой `sysctl -p /etc/sysctl.conf`.
-
 ## Быстрая установка
 
 Для обычной установки используйте ветку `stable`. Ветка `main` — интеграционная: изменения сначала проходят CI и проверку, а затем отдельным PR продвигаются в `stable`.
@@ -116,8 +100,9 @@ chmod +x install.sh
 
 ## Пошаговая установка (ручная)
 
+Если файл уже скачан командой из «Быстрой установки»:
+
 ```bash
-install.sh
 chmod +x install.sh uninstall.sh
 sudo ./install.sh
 ```
@@ -131,11 +116,7 @@ sudo ./install.sh
 6. Запустит сервис и watchdog
 
 ---
----
 
-### Настройка Mihomo (важно!):
-
-```markdown
 ## Настройка Mihomo (важно!)
 
 В `config.yaml` Mihomo должен быть включён TUN-режим строго со следующими параметрами:
@@ -165,7 +146,7 @@ dns:
     - 1.1.1.1
 ```
 
-**Важно:** 
+**Важно:**
 - `auto-route: false` критически важен. Наш скрипт маршрутизации сам создаёт отдельную **таблицу 100** и направляет туда только трафик Докера. Если Mihomo включит `auto-route`, он перехватит весь трафик сервера.
 - IPv4 на TUN по-прежнему необходим для корректного IPv4/NAT-сценария, но в **Mihomo 1.19.31** top-level `tun.inet4-address` не управляет этим адресом: `RawTun.Inet4Address` не разбирается, а `parseTun()` формирует IPv4-префикс TUN из `dns.fake-ip-range` и приводит его к `/30`. При нашем `fake-ip-range: 198.18.0.0/16` это объясняет наблюдавшийся live-префикс `198.18.0.0/30`. Installer удаляет legacy top-level `tun.inet4-address`, если он остался от старого конфига, и больше не пытается навязать отдельный `10.255.255.1/30` через неэффективное поле. `inet4-address` внутри per-proxy TUN listeners не удаляется: это другой config path Mihomo, где поле поддерживается.
 
@@ -202,7 +183,7 @@ proxies:
     port: 2408
     ...
 ```
----
+
 ---
 
 ## Проверка работы
@@ -235,6 +216,22 @@ curl https://1.1.1.1/cdn-cgi/trace
 ```
 
 ---
+
+## Read-only диагностика rp_filter (development)
+
+В checkout ветки main можно выполнить `bash doctor.sh` без root. Команда только
+читает runtime `/proc/sys/net/ipv4/conf/*/rp_filter` и persistent sysctl declarations:
+выводит конфликтующие all/default/interface значения, wildcard/slash keys и UNKNOWN
+для недоступных данных. Exit 0 — наблюдаемых предупреждений нет; 1 — WARN/UNKNOWN;
+2 — неверные аргументы. `AMG_DIAGNOSTIC_ROOT` задаёт корень fixture-дерева для тестов.
+
+Это диагностическая возможность main, ещё не опубликованная в stable v2.0.1.
+Doctor не вычисляет итоговый boot precedence/masks: найденный directive может быть
+перекрыт другим файлом, но опасен при ручном whole-file reload. Он не вызывает
+sysctl/reload, не правит внешний config и не доказывает причину исторического AWG
+инцидента #31. Перед maintenance сопоставьте runtime all/default/interfaces с
+project fragment и согласуйте конфликтующие внешние настройки с администратором;
+не выполняйте слепой `sysctl -p /etc/sysctl.conf`.
 
 ## Как это работает (для любопытных)
 
