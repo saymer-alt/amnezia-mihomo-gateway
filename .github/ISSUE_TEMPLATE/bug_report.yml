@@ -1,0 +1,33 @@
+name: "Ошибка / Bug report"
+description: "Воспроизводимая проблема: AmneziaAWG, Mihomo TUN и WARP на VPS"
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "Не публикуйте секреты, конфигурации с ключами, реальные URL подписок, персональные сведения и детали нераскрытых уязвимостей."
+  - type: textarea
+    id: actual
+    attributes:
+      label: "Проблема и ожидаемый результат"
+      description: "Опишите наблюдаемое и ожидаемое поведение."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: "Воспроизведение"
+      description: "Минимальные шаги либо ссылка на конкретный документ; без секретов."
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: "Версии, среда и источники"
+      description: "Платформа/версии или документ/источник с датой проверки."
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: "Безопасные дополнительные материалы"
+      description: "Обезличенные журналы, ссылки и результаты тестов; не обязательны."
