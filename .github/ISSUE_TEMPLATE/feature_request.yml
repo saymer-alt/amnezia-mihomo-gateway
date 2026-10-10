@@ -1,0 +1,23 @@
+name: "Предложение / Feature request"
+description: "Идея для AmneziaAWG, Mihomo TUN и WARP на VPS"
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Задача пользователя"
+      description: "Какая проблема возникает сейчас?"
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: "Предлагаемое улучшение"
+      description: "Опишите поведение, ожидаемый результат и ограничения."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Источники / альтернативы"
+      description: "Если известны, приложите ссылки и проверенный контекст."
