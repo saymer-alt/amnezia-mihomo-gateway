@@ -1,5 +1,23 @@
 # AGENTS.md — amnezia-mihomo-gateway
 
+## Owner mental model: complex composition of simple independent bricks
+
+The owner intentionally builds **very complex overall systems out of individually simple, autonomous components**. Each component performs its small role well and need not understand its neighbors: cameras capture; a ring-buffer NVR stores; streaming/adapter and CRT display do their own tasks. The same architecture principle appears in his plumbing, three-phase electrical panel, and VPS networking. The **architect holds the system-level reasoning**, not a centralized program that must know everything.
+
+For AMG, model and test the Amnezia inbound, Linux/Docker/TUN packet bridge, Mihomo egress, providers and watchdog as separate local contracts. Trace interfaces and failure transitions. Do not combine their responsibilities for convenience, or reconfigure Xray/router/other VPS to 'simplify' the diagram. Unknown interface semantics require owner clarification.
+
+## Owner intent: independent layers even on the same VPS (2026-10-18)
+
+The owner designs **complex autonomous layers of abstraction**, not a single monolith. Preserve explicit separation:
+
+- AmneziaWG Docker container is an **inbound VPN service**; Xray/3x-ui and Mieru, if present, are separate inbound applications. They do **not** need to know the Mihomo exit hierarchy.
+- OS/Docker policy routing, iptables and TUN are the **connector/fail-secure boundary**. AMG owns only its declared, verified part of this bridge; it does not own all applications or all routing on the VPS.
+- Mihomo has its **independent config and choices**: GLOBAL manual selector → EXIT_STRATEGY/MAIN_AUTO fallback between locally defined tiers → url-test within tiers (e.g., MASQUE, WG, provider lists). Mihomo does not need to know which inbound application sourced a packet.
+- The four VPS are autonomous. Optional MSK→EE transit is an ordinary network hop, **not shared host configuration or fleet orchestration**. Changes here must not reach another VPS without explicit owner approval.
+- Fail secure *for traffic this gateway manages*: no unintended fallthrough to VPS public-IP egress. Service-plane bootstrap/health/DNS/transport are distinct from user traffic. YAML alone cannot prove OS firewall/routing properties.
+
+**Agent instruction:** Do not 'simplify' by merging Amnezia/Mihomo/Xray/OS routing responsibilities or rewriting a working inbound service just to change an egress preference. Preserve production scripts, ownership and rollback; verify the real packet path and ask before any scope expansion or trade-off. No changes to real VPS or stable under this documentation rule.
+
 Persistent instructions for AI agents (primarily ZCode) working with this repository.
 This file complements `README.md` and `install.md` rather than duplicating them: README is user documentation
 (architecture, Mihomo TUN configuration, verification, troubleshooting), while this file contains working rules and traps for
