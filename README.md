@@ -1,5 +1,23 @@
 # amnezia-mihomo-gateway
 
+### Граница автономных слоёв (решение владельца, 18.10.2026)
+
+Эта система — **не монолит**. AmneziaWG принимает клиентские соединения,
+Mihomo на каждой VPS самостоятельно выбирает выход через локальные
+`GLOBAL` → `EXIT_STRATEGY`/`MAIN_AUTO` (fallback между эшелонами,
+url-test внутри каждого), а Docker/iptables/Linux policy routing/TUN
+связывают их через явный проверяемый контракт. Xray/3x-ui, Mieru и
+AmneziaWG не обязаны знать о настройках Mihomo; Mihomo не обязан
+знать о составе inbound-сервисов. Схемы выходов на SE, SE2, EE,
+MSK индивидуальны; если MSK направляет трафик через EE, EE сам
+выбирает дальнейший выход.
+
+**Зона ответственности этого проекта — мост для AWG-трафика, а не
+управление всеми VPS, Xray или конфигурациями Mihomo.**
+Fail-secure следует доказывать на уровне packet path/маршрутизации,
+не только проверкой YAML. Для задач о VPS домашний Keenetic
+(v1.11.1) не менять. Подробная инструкция агенту — [AGENTS.md](AGENTS.md).
+
 Автоматизированная настройка маршрутизации Docker-контейнера **AmneziaAWG** через TUN-интерфейс **Mihomo** (Clash Meta) с выходом в интернет через **Cloudflare WARP**.
 
 > **EN:** Route AmneziaWG (Docker) client traffic through a Mihomo TUN so egress exits via Cloudflare WARP: destination sites see WARP IPs, not the VPS IP. VPN clients still know the VPS IP as their tunnel endpoint.
