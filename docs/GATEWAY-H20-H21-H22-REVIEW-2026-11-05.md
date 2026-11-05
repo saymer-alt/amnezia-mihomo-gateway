@@ -43,6 +43,39 @@ daemon.json уже существует и Docker не перезапускае�
 mounts — fresh admission обязателен, mid-run verify отказывает). Формы перехода теперь
 зафиксированы как fail-closed до owner-решения о варианте A/C.
 
+### Решение-кандидат: вариант C — тот же container ID, явная re-admission (2026-11-05, продолжение)
+
+Реализовано в install.sh (ветка этого PR): новый режим `readmit` в runtime-binding — после
+**установщиком вызванного** `systemctl restart docker` (единственный шаг, перезапускающий Docker)
+для Docker-bound Mihomo выполняется явная повторная привязка. Re-admission принимается ТОЛЬКО при
+полной идентичности: container ID, argv, mounts, config path, config file fingerprint
+(device/inode + sha256); различаться могут только PID/start процесса и State.Pid/StartedAt
+контейнера. Любое другое изменение (recreate с новым ID, подмена mount, смена argv, внешняя правка
+конфига) — отказ fail-closed. Сообщение о re-admission печатается явно; молчаливого rediscovery нет.
+systemd-bound Mihomo этим переходом не затрагивается и продолжает строгий verify.
+
+**Почему не A (перенос daemon.json до discovery):** перенос перемещает системную мутацию
+(создание daemon.json + перезапуск Docker) ДО runtime admission: на хосте без запущенного Mihomo
+установщик сначала мутировал бы Docker-состояние и только затем отказал — регрессия против
+текущего порядка, где no-running-Mihomo отказывает до любых записей. Успешный Docker restart
+тоже перестаёт быть покрытым проверкой живого Mihomo (admission до restart ничего не знает о
+последствиях restart для контейнера).
+
+**Почему C — самый маленький проверяемый вариант (оценка по критериям):**
+SSH/management access — не затрагивается (переход не касается SSH-путей); восстановление после
+частичной операции — при отказе re-admission сохраняется прежняя честная семантика B (повторный
+запуск завершает установку: daemon.json уже существует, restart не повторяется); ownership уже
+изменённых файлов — не меняется (daemon.json-admission и DNS ownership работают как раньше);
+неуспешный Docker restart — контейнер не вернулся → нет mihomo-процесса → отказ no-runtime до
+любой записи конфига; container recreation — новый ID не принимается (fresh admission); замена
+mounts — mount-набор входит в сравнение; PID reuse — PID сопоставляется с `State.Pid` того же
+container ID + exe/argv/env-check; race discovery ↔ atomic rename — сохранены существующие
+fingerprint и re-verify перед rename; идемпотентность повторного запуска — daemon.json уже
+существует → restart не выполняется → readmit не вызывается.
+
+**BLOCKED (без изменений):** реальный Docker acceptance перехода (настоящий restart/recreate,
+PID reuse, reboot) — disposable VPS.
+
 **BLOCKED (требует disposable VPS / live):** реальный systemd override/drop-in ExecStart,
 реальные Docker directory mounts, PID reuse, argv/cwd/config-правки между discovery и rename,
 reboot; fixtures не доказывают поведение systemd/Docker/Mihomo (по семантике сверено с 1.19.31).

@@ -192,6 +192,23 @@ def discover():
             'resolved': str(resolved), 'file': fingerprint(host)}
 
 
+def readmit_view(binding):
+    # Process-only projection for re-admission after the installer-caused
+    # Docker restart (docs/GATEWAY-H20-H21-H22-REVIEW-2026-11-05.md, option C).
+    # The container ID, argv, mounts, config path and config fingerprint must
+    # be identical; only the OS process identity (PID, start time) and the
+    # container's own State.Pid/StartedAt may differ. A recreated container
+    # (new ID) or any other change refuses.
+    import copy
+    view = copy.deepcopy(binding)
+    for key in ('pid', 'start'):
+        view['runtime'].pop(key, None)
+    state = (view.get('controller') or {}).get('metadata', {}).get('State')
+    if isinstance(state, dict):
+        state.pop('Pid', None); state.pop('StartedAt', None)
+    return view
+
+
 def main():
     current = discover()
     mode = sys.argv[1]
@@ -202,6 +219,11 @@ def main():
         if current != expected:
             refuse('runtime/config identity changed; refusing mutation/restart')
     elif mode == 'discover':
+        print(json.dumps(current, sort_keys=True))
+    elif mode == 'readmit':
+        expected = readmit_view(json.loads(sys.argv[2]))
+        if readmit_view(current) != expected:
+            refuse('runtime changed beyond an installer-caused same-container restart; refusing re-admission')
         print(json.dumps(current, sort_keys=True))
     else:
         refuse('unknown binding operation')
@@ -427,6 +449,15 @@ EOF
         printf '%s\n' "$DOCKER_GW" > "$STATE_DIR/docker_dns_gateway"
         systemctl restart docker
         echo -e "${CYAN}    -> Docker DNS настроен; ownership-state сохранён.${NC}"
+        # Installer-caused Docker restart: the same container returns with a new
+        # PID. Re-admission is explicit and provable — same container ID, argv,
+        # mounts, config path and unchanged config file; anything else refuses
+        # fail-closed (option C of the #20 transition analysis; no silent
+        # rediscovery, a recreated container requires fresh admission).
+        if [ "$MIHOMO_CONTROLLER_KIND" = docker ]; then
+            echo -e "${YELLOW}[*] Runtime был перезапущен установщиком: повторная привязка к тому же контейнеру...${NC}"
+            MIHOMO_RUNTIME=$(mihomo_runtime_binding readmit "$MIHOMO_RUNTIME")
+        fi
     else
         echo -e "${CYAN}    -> daemon.json уже существует, пропускаем.${NC}"
     fi
