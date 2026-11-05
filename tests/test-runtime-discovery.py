@@ -171,6 +171,44 @@ class BindingTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.verify(result)
         container['Mounts'][0]['Source'] = str(self.base); self.refuse()
 
+    def test_docker_same_id_restart_new_pid_refused(self):
+        """The documented PR blocker (docs/RUNTIME_DISCOVERY_ACCEPTANCE.md):
+        installer-created daemon.json restarts Docker before the config phase;
+        the container keeps its ID but Mihomo comes back with a NEW PID. The
+        mid-run verify must refuse (no silent re-admission) until an explicit,
+        modeled ownership transition is accepted by the owner. This test pins
+        the fail-closed refusal for the same-ID restart shape."""
+        container = self.docker()
+        result = self.discover()
+        self.assertEqual(result['controller']['id'], container['Id'])
+        # Docker restart: same container ID, new PID, new StartedAt.
+        (self.proc / str(container['State']['Pid']) / 'exe').unlink()
+        self.pid(12)
+        root = self.proc / '12/root'  # same container: keep the root mapping
+        root.unlink(); root.symlink_to(self.base / 'container-root', target_is_directory=True)
+        container['State']['Pid'] = 12
+        container['State']['StartedAt'] = 'restarted'
+        with self.assertRaises(ValueError):
+            self.verify(result)
+
+    def test_docker_recreated_container_new_id_refused(self):
+        """Container RECREATION (docker rm + run / compose --force-recreate):
+        new container ID with the same name/argv/mounts. Fresh admission is
+        required (docs/RUNTIME_DISCOVERY_ACCEPTANCE.md); a mid-run verify must
+        refuse instead of silently re-binding to the replacement."""
+        container = self.docker()
+        result = self.discover()
+        (self.proc / '11/exe').unlink()
+        self.pid(12)
+        root = self.proc / '12/root'
+        root.unlink(); root.symlink_to(self.base / 'container-root', target_is_directory=True)
+        replacement = {'Id': 'b' * 64, 'Path': 'mihomo', 'Args': self.argv[1:],
+                       'State': {'Running': True, 'Pid': 12, 'StartedAt': 'recreated'},
+                       'Mounts': [dict(container['Mounts'][0])]}
+        self.containers = [replacement]
+        with self.assertRaises(ValueError):
+            self.verify(result)
+
     def test_docker_same_inode_other_device_refused(self):
         self.docker()
         visible = self.proc / '11/root/config/config.yaml'
