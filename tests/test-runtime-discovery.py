@@ -68,6 +68,25 @@ class BindingTests(unittest.TestCase):
         with patch.object(sys, 'argv', ['runtime', mode, json.dumps(original)]):
             self.namespace['main']()
 
+    def readmit(self, original):
+        """Explicit same-container re-admission after an installer-caused
+        Docker restart; returns the re-bound identity JSON."""
+        with patch.object(sys, 'argv', ['runtime', 'readmit', json.dumps(original)]):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.namespace['main']()
+        return json.loads(out.getvalue())
+
+    def restart_container_process(self, container):
+        """Model `docker restart <same container>`: old PID gone, new PID with
+        the same argv/root mapping, container ID unchanged."""
+        (self.proc / str(container['State']['Pid']) / 'exe').unlink()
+        self.pid(12)
+        root = self.proc / '12/root'  # same container: keep the root mapping
+        root.unlink(); root.symlink_to(self.base / 'container-root', target_is_directory=True)
+        container['State']['Pid'] = 12
+        container['State']['StartedAt'] = 'restarted'
+
     def test_systemd_d_ignores_backup_configs_and_reinstall(self):
         (self.base / 'backup').mkdir(); (self.base / 'backup/config.yaml').write_text('unrelated')
         result = self.discover()
@@ -170,6 +189,105 @@ class BindingTests(unittest.TestCase):
         container['State']['StartedAt'] = 'restarted'
         with self.assertRaises(ValueError): self.verify(result)
         container['Mounts'][0]['Source'] = str(self.base); self.refuse()
+
+    def test_docker_same_id_restart_new_pid_refused(self):
+        """The documented PR blocker (docs/RUNTIME_DISCOVERY_ACCEPTANCE.md):
+        installer-created daemon.json restarts Docker before the config phase;
+        the container keeps its ID but Mihomo comes back with a NEW PID. The
+        mid-run verify must refuse (no silent re-admission) until an explicit,
+        modeled ownership transition is accepted by the owner. This test pins
+        the fail-closed refusal for the same-ID restart shape."""
+        container = self.docker()
+        result = self.discover()
+        self.assertEqual(result['controller']['id'], container['Id'])
+        # Docker restart: same container ID, new PID, new StartedAt.
+        self.restart_container_process(container)
+        with self.assertRaises(ValueError):
+            self.verify(result)
+
+    def test_readmit_accepts_same_id_restart(self):
+        """Option C of the transition analysis: the installer-caused Docker
+        restart re-binds explicitly. The container ID, argv, mounts, config
+        path and config file must be identical; only the process identity may
+        differ. The previous binding stays refused; the re-admitted one
+        verifies."""
+        container = self.docker()
+        result = self.discover()
+        self.restart_container_process(container)
+        rebound = self.readmit(result)
+        self.assertEqual(rebound['controller']['id'], result['controller']['id'])
+        self.assertEqual(rebound['path'], result['path'])
+        self.assertEqual(rebound['file'], result['file'])
+        self.assertNotEqual(rebound['runtime']['pid'], result['runtime']['pid'])
+        with self.assertRaises(ValueError):
+            self.verify(result)
+        self.verify(rebound)
+
+    def test_readmit_refuses_recreated_container(self):
+        """A recreated container (new ID, same name/argv/mounts) is NOT
+        re-admissible: fresh admission is required."""
+        container = self.docker()
+        result = self.discover()
+        (self.proc / str(container['State']['Pid']) / 'exe').unlink()
+        self.pid(12)
+        root = self.proc / '12/root'
+        root.unlink(); root.symlink_to(self.base / 'container-root', target_is_directory=True)
+        self.containers = [{'Id': 'b' * 64, 'Path': 'mihomo', 'Args': self.argv[1:],
+                            'State': {'Running': True, 'Pid': 12, 'StartedAt': 'recreated'},
+                            'Mounts': [dict(container['Mounts'][0])]}]
+        with self.assertRaises(ValueError):
+            self.readmit(result)
+
+    def test_readmit_refuses_mount_argv_and_config_changes(self):
+        """Re-admission is exact: a changed mount source, changed argv or an
+        externally edited config file between discovery and the restart all
+        refuse instead of silently re-binding. (A mount that no longer maps
+        the file fails at the filesystem check — OSError — which the CLI
+        treats as the same fail-closed refusal.)"""
+        container = self.docker()
+        result = self.discover()
+        self.restart_container_process(container)
+        container['Mounts'][0]['Source'] = str(self.base)
+        with self.assertRaises((ValueError, OSError)):
+            self.readmit(result)
+        container['Mounts'][0]['Source'] = str(self.home)
+        container['Args'] = ['-d', '/other']
+        with self.assertRaises(ValueError):
+            self.readmit(result)
+        container['Args'] = self.argv[1:]
+        self.config.write_text('admin changed before readmit')
+        with self.assertRaises(ValueError):
+            self.readmit(result)
+
+    def test_readmit_call_follows_installer_docker_restart(self):
+        """Source-level wiring: the re-admission must run immediately after the
+        installer's own `systemctl restart docker` and only for Docker-bound
+        Mihomo; a systemd-bound runtime is never restarted by this branch and
+        keeps the strict verify."""
+        restart = SOURCE.index('systemctl restart docker')
+        call = SOURCE.index('mihomo_runtime_binding readmit "$MIHOMO_RUNTIME"')
+        self.assertLess(restart, call)
+        between = SOURCE[restart:call]
+        self.assertIn('MIHOMO_CONTROLLER_KIND', between)
+        self.assertIn('docker', between)
+
+    def test_docker_recreated_container_new_id_refused(self):
+        """Container RECREATION (docker rm + run / compose --force-recreate):
+        new container ID with the same name/argv/mounts. Fresh admission is
+        required (docs/RUNTIME_DISCOVERY_ACCEPTANCE.md); a mid-run verify must
+        refuse instead of silently re-binding to the replacement."""
+        container = self.docker()
+        result = self.discover()
+        (self.proc / '11/exe').unlink()
+        self.pid(12)
+        root = self.proc / '12/root'
+        root.unlink(); root.symlink_to(self.base / 'container-root', target_is_directory=True)
+        replacement = {'Id': 'b' * 64, 'Path': 'mihomo', 'Args': self.argv[1:],
+                       'State': {'Running': True, 'Pid': 12, 'StartedAt': 'recreated'},
+                       'Mounts': [dict(container['Mounts'][0])]}
+        self.containers = [replacement]
+        with self.assertRaises(ValueError):
+            self.verify(result)
 
     def test_docker_same_inode_other_device_refused(self):
         self.docker()
