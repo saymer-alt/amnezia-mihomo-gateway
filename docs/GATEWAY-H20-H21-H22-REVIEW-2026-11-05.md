@@ -111,10 +111,28 @@ AWG-veth и блокирует attacker **включая spoofed source IP**, о
 **Ограничение этого окружения (уточнение причины SKIP):** WSL запрещает чтение
 `/proc/<pid>/ns/*` чужих процессов даже для root и даже для прямых детей — admission лаборатории
 (сверка namespace'ов родителя и ребёнка) принципиально не выполнима; это свойство среды, а не
-дефект AMG. Требуется disposable Linux-хост. **BLOCKED:** реальный AWG handshake/RX/TX/WAN-capture,
+дефект AMG. Требуется disposable Linux-хост. **Доступность механизма physdev (read-only проверка,
+WSL kernel 6.18.54.1-microsoft-standard-WSL2):** userspace-расширение `iptables -m physdev`
+присутствует (nf_tables backend 1.8.11), модуль ядра `xt_physdev.ko` есть в модулях ядра,
+`br_netfilter` загружен (`/proc/sys/net/bridge/bridge-nf-call-*` доступны) — то есть блокер
+лаборатории именно в ns-admission, а не в отсутствии механизма; тем не менее правило-кандидат
+требует packet proof на disposable стенде. **BLOCKED:** реальный AWG handshake/RX/TX/WAN-capture,
 модель возможностей attacker, multiple peers/roaming/reconnect/recreate/reboot, окна при замене
 правил, скорость/MTU/MSS. #22 остаётся открытым; только исследование/opt-in инструмент, не
 production-изменение bypass identity.
+
+## #21 — дополнение: негативный кейс «ошибка между созданием daemon.json и Docker restart»
+
+Добавлен в `tests/test-ownership-rollback.sh` (реальный DNS-блок install.sh на fixture-путях,
+stateful systemctl mock): первый прогон с `MOCK_SYSTEMCTL_FAIL='restart docker'` — установка
+честно падает, daemon.json создан, ownership-записи (created/sha256) соответствуют диску; второй
+прогон — ветка создания пропущена (файл существует), **ни повторного присвоения, ни повторного
+`restart docker` в логе**, content и sha неизменны. Покрыт сценарий «ошибка между Docker restart
+и state persistence» из матрицы #21: state не опережает диск, восстановление — повторный запуск +
+операторский restart Docker вручную (это единственный restart-site). Остальные пункты матрицы
+#21 (regular/symlink/missing/immutable resolv.conf, resolved active/enabled, admin-managed
+daemon.json, внешние изменения, staging-ошибки) уже покрыты существующим набором; disposable-VPS
+приёмка — BLOCKED.
 
 ## #21 — ownership-aware DNS (приоритет 3)
 

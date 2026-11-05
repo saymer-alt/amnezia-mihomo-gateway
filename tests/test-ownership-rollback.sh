@@ -344,6 +344,28 @@ run_dns_admission "$CASE"
 [[ -L "$CASE/etc/docker/daemon.json" && ! -e "$CASE/foreign.json" ]]
 [[ ! -e "$CASE/state/docker_daemon_created" ]]
 
+# Failed installer-caused `systemctl restart docker` inside the DNS block:
+# daemon.json creation and its ownership records precede the restart, so a
+# failed restart must leave provable, disk-truthful ownership state, and a
+# re-run must neither re-create/re-own the file nor silently retry the Docker
+# restart (the creation branch is the only restart site). The operator learns
+# the failed run's outcome from the failing installer exit, not from state.
+CASE="$TMP_DIR/daemon-restart-failed"; prepare_case "$CASE"
+export MOCK_SYSTEMCTL_FAIL='restart docker'
+if run_dns_admission "$CASE"; then echo 'FAIL: failed docker restart not reported'; exit 1; fi
+unset MOCK_SYSTEMCTL_FAIL
+[[ -f "$CASE/etc/docker/daemon.json" ]]
+grep -Fq '"dns": ["172.17.0.1"]' "$CASE/etc/docker/daemon.json"
+DAEMON_FAILED_RUN=$(sha256sum "$CASE/etc/docker/daemon.json" | awk '{print $1}')
+[[ "$(cat "$CASE/state/docker_daemon_sha256")" == "$DAEMON_FAILED_RUN" ]]
+[[ -f "$CASE/state/docker_daemon_created" ]]
+: > "$SYSTEMCTL_LOG"
+run_dns_admission "$CASE"   # re-run: creation branch skipped (file exists)
+[[ "$(sha256sum "$CASE/etc/docker/daemon.json" | awk '{print $1}')" == "$DAEMON_FAILED_RUN" ]]
+[[ "$(cat "$CASE/state/docker_daemon_sha256")" == "$DAEMON_FAILED_RUN" ]]
+! grep -Fq 'restart docker' "$SYSTEMCTL_LOG"
+echo 'PASS: failed installer docker restart keeps honest ownership; re-run never re-owns or retries'
+
 CASE="$TMP_DIR/reinstall-reactivated"; prepare_dns "$CASE"
 echo active > "$TMP_DIR/resolved.active"
 if run_dns_admission "$CASE"; then echo 'FAIL: reactivated admin DNS overwritten'; exit 1; fi
