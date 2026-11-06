@@ -307,6 +307,45 @@ sudo ./uninstall.sh
 
 ## Траблшутинг
 
+### Mihomo active, но DNS TCP/UDP 53 занят systemd-resolved (SE/EE, 06.11.2026)
+
+**Полевой симптом:** при `dns.listen: 0.0.0.0:53` сам `mihomo.service` остаётся `active`, но пишет `Start DNS server(TCP/UDP) error: bind: address already in use`. В `ss` порт 53 вместо Mihomo занимает `systemd-resolved` на `127.0.0.53/54`. Наличие обычного `/etc/resolv.conf` с публичными DNS и атрибутом immutable **не гарантирует**, что systemd-resolved сейчас выключен. Выяснить, кто и когда повторно включил сервис на этих двух VPS, пока не удалось: исходная причина **UNKNOWN**.
+
+Прежде чем что-либо менять, проверить **на конкретном хосте**, не копируя решение на остальные:
+
+```bash
+systemctl is-active systemd-resolved
+systemctl is-enabled systemd-resolved
+ls -l /etc/resolv.conf
+cat /etc/resolv.conf
+lsattr -d /etc/resolv.conf 2>/dev/null || true
+ss -lntup | grep ':53 ' || true
+journalctl -u mihomo -n 50 --no-pager
+ip -4 route show table 100
+```
+
+Installer §2.6 **уже** умеет отключить active systemd-resolved при первичной managed-установке с ownership snapshot. Если `dns_state_recorded` уже существует, а resolved снова активен, повторный installer **намеренно блокирует автоматическую перезапись DNS**: не удалять state и не запускать installer для обхода guard на рабочем сервере. Причина поздней активации может лежать вне AMG (сервисное обновление, вручную включённая служба и т. д.); проверить историю отдельно.
+
+Если оператор подтвердил, что `/etc/resolv.conf` — **самостоятельный рабочий файл**, а DNS 53 должен слушать именно Mihomo, можно **осознанно** отключить resolved; перед изменением проверить DNS потребителей Docker и хоста. На SE/EE после ручного `systemctl disable --now systemd-resolved` удалось получить успешное `getent ahostsv4`, повторный старт Mihomo и `ss` с Mihomo на обоих TCP/UDP 53. У другого VPS такой приём **не гарантирован** и без проверки может сломать разрешение имён.
+
+После любого изменения DNS/TUN требуется проверить:
+
+```bash
+systemctl is-active mihomo
+getent ahostsv4 github.com
+ss -lntup | grep ':53 ' || true
+ip -br addr show tun-mihomo
+ip -4 route show table 100
+systemctl is-active check-warp-routing.timer
+```
+
+Если `tun-mihomo` есть, но в таблице 100 только `unreachable default`, пользовательский egress заблокирован защитным маршрутом, а не работает. На хосте с уже установленным AMG и разрешёнными действиями оператор может восстановить owned route через `systemctl restart warp-docker-routing.service`, а затем повторить проверку. Подтверждение маршрутов и `curl -x 127.0.0.1:7890` **не заменяет** проверки через настоящий AWG-клиент.
+
+В installer main добавлена **post-start проверка** только стандартного systemd-Mihomo с `dns.enable: true` и `listen: 0.0.0.0:53`: после рестарта он должен реально владеть TCP и UDP :53, иначе installation report не должен говорить SUCCESS. Нестандартные listen, DNS disabled и Docker-contained Mihomo выводятся как **непроверенные**, а не как доказанные рабочие. Проверка не отключает, не маскирует и не перенастраивает чужие сервисы. Она **не является постоянным мониторингом** повторного запуска resolved спустя дни/месяцы. Для такого случая остаются диагностика и отдельное проектное решение.
+
+**Безопасность:** `0.0.0.0:53` слушает и на публичных интерфейсах. Проверять UFW/nftables, исключить открытый рекурсивный DNS наружу и при необходимости подтвердить внешним тестом. Не публиковать в issue полные YAML с ключами, HWID и subscription URLs.
+
+
 ### После `sysctl -p /etc/sysctl.conf` перестал работать AWG через Docker
 
 Для этой схемы `rp_filter=0` критичен: Docker-трафик приходит через bridge, а уходит через `tun-mihomo`. Если в общем `/etc/sysctl.conf` остались старые строки вроде:
