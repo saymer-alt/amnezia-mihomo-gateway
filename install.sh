@@ -830,14 +830,71 @@ OnUnitActiveSec=1min
 WantedBy=timers.target
 EOF
 
+# BEGIN AMG_DNS53_POSTSTART
+# Post-start proof for the documented systemd Mihomo DNS profile only.
+# Do not change foreign service ownership or assume an active Mihomo has DNS.
+amg_check_documented_dns53() {
+    local config="$1" tcp_listeners udp_listeners
+    if [ ! -f "$config" ]; then
+        echo "Ошибка: Mihomo config отсутствует при DNS post-start check." >&2
+        return 1
+    fi
+    # Minimal read-only recognition of the documented top-level YAML layout.
+    # Other listen addresses or disabled DNS are not asserted as :53 profiles.
+    if ! awk '
+        /^dns:[[:space:]]*(#.*)?$/ { in_dns=1; next }
+        in_dns && /^[^[:space:]#]/ { in_dns=0 }
+        in_dns && /^  enable:/ { enabled=($2 == "true") }
+        in_dns && /^  listen:/ {
+            value=$2
+            gsub(/["\047]/, "", value)
+            listen53=(value == "0.0.0.0:53")
+        }
+        END { exit !(enabled && listen53) }
+    ' "$config"; then
+        echo "DNS :53 post-start: SKIP (нестандартный профиль, требуется ручная проверка)."
+        return 0
+    fi
+
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        echo "Ошибка: systemd-resolved снова active; Mihomo DNS :53 требует отдельного устранения конфликта." >&2
+        return 1
+    fi
+    if ! systemctl is-active --quiet mihomo.service; then
+        echo "Ошибка: mihomo.service не active после рестарта." >&2
+        return 1
+    fi
+    if ! command -v ss >/dev/null 2>&1; then
+        echo "Ошибка: ss (iproute2) отсутствует — DNS listener не подтверждён." >&2
+        return 1
+    fi
+    if ! tcp_listeners=$(ss -H -lntp '( sport = :53 )') ||
+       ! udp_listeners=$(ss -H -lnup '( sport = :53 )'); then
+        echo "Ошибка: ss не смог проверить TCP/UDP listeners :53." >&2
+        return 1
+    fi
+    if ! printf '%s\n' "$tcp_listeners" | grep -Eq '(^|[[:space:]])(\*|0\.0\.0\.0):53[[:space:]].*\("mihomo",'; then
+        echo "Ошибка: Mihomo не владеет TCP 0.0.0.0:53 после запуска." >&2
+        return 1
+    fi
+    if ! printf '%s\n' "$udp_listeners" | grep -Eq '(^|[[:space:]])(\*|0\.0\.0\.0):53[[:space:]].*\("mihomo",'; then
+        echo "Ошибка: Mihomo не владеет UDP 0.0.0.0:53 после запуска." >&2
+        return 1
+    fi
+    echo "DNS :53: TCP и UDP слушает Mihomo (OBSERVED)."
+}
+# END AMG_DNS53_POSTSTART
+
 # 6. Перед рестартом Mihomo ставим независимый fail-secure barrier.
 echo -e "${YELLOW}[*] Установка fail-secure guard...${NC}"
 /usr/local/sbin/warp-docker-routing.sh guard
 
 # 6. Перезапуск Mihomo
 echo -e "${YELLOW}[*] Перезапуск Mihomo...${NC}"
+MIHOMO_RESTARTED_SYSTEMD=0
 if systemctl list-unit-files | grep -q "^mihomo.service"; then
     systemctl restart mihomo.service
+    MIHOMO_RESTARTED_SYSTEMD=1
 elif command -v docker >/dev/null 2>&1; then
     MIHOMO_C=$(docker ps -a --format '{{.Names}}' | grep "mihomo" | head -n1)
     if [ -n "$MIHOMO_C" ]; then
@@ -856,6 +913,16 @@ systemctl daemon-reload
 systemctl enable warp-docker-routing.service
 systemctl restart warp-docker-routing.service
 systemctl enable --now check-warp-routing.timer
+
+# Never report a successful install when canonical Mihomo DNS failed to bind.
+# Docker-based Mihomo and nonstandard DNS layouts require a separate field check.
+if [ "$MIHOMO_RESTARTED_SYSTEMD" -eq 1 ] && [ -n "$MIHOMO_CONFIG" ]; then
+    echo "[*] Проверка DNS listener Mihomo после запуска..."
+    if ! amg_check_documented_dns53 "$MIHOMO_CONFIG"; then
+        echo "Установка НЕ подтверждена: DNS :53 не работает. Автоматически не меняем чужие службы; исправьте конфликт и перепроверьте вручную." >&2
+        exit 1
+    fi
+fi
 
 echo -e "${GREEN}========================================================${NC}"
 echo -e "${GREEN}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! (Версия 2.0)${NC}"
