@@ -77,6 +77,12 @@ jobs:
           set -euo pipefail
           bash tests/test-installer-reconcile.sh
 
+      - name: Installer DNS :53 post-start ownership fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/test-dns-poststart.sh
+
       - name: Watchdog regression tests
         shell: bash
         run: |
