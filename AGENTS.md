@@ -1,219 +1,38 @@
-> **Обязательный контракт для всех агентов и авторов ТЗ (30.10.2026):** [подробная постановка задач без «эффекта обезьяньей лапки»](https://github.com/saymer-alt/saymer-alt/blob/main/AGENT-TASK-CONTRACT.md). Перед работой проверить исходные refs/SHA, готовые результаты, точную цель, scope/non-goals, сохранность данных и сервисов, зависимости, границы разрешений/owner GO, негативную приёмку и доказательства. Не сокращать существенные требования ради токенов. Буквальное выполнение в ущерб цели считается **FAIL**. Местные правила безопасности и архитектуры обязательны.
+# AGENTS.md — amnezia-mihomo-gateway essentials
 
-> **Владелец, 26.10.2026 — общее правило для всех проектов:** перед внедрением новой функции / серьёзной переделки требуется короткая «защита идеи» — доказать проблему, сравнить альтернативы (включая ничего не менять / штатную ОС / ждать upstream), оценить пользу, **ТЭО**, стоимость сопровождения, риски, измеримый тест и критерии STOP. Нет доказательства пользы — DEFER/SKIP. Мелкие исправления не требуют отдельной бюрократии. **Источник:** [Proof Before Build](https://github.com/saymer-alt/saymer-alt/blob/main/PROOF-BEFORE-BUILD.md) ([центральный PR #9](https://github.com/saymer-alt/saymer-alt/pull/9)). Существующие safety/CI/permissions сохраняются.
+Small mandatory startup contract for AI coding agents. **Do not preload** the entire `docs/` tree, historic field reports or the relocated detailed guides. Read only relevant guides below. Current `install.sh`, `uninstall.sh`, `doctor.sh` and regression tests outrank dated descriptions. `README.md` and `install.md` serve users.
 
-# AGENTS.md — amnezia-mihomo-gateway
+## Project, branches and operator authority
 
-## Owner-wide design gate — SIMPLICITY-FIRST (2026-10-24)
+This is a root-capable VPS installer routing AmneziaWG clients in Docker through Mihomo TUN/WARP. It can modify routing, firewall, DNS, systemd, Docker and thus SSH reachability. `main` is integration; **`stable` is the public production installer channel**. Use isolated branches and Draft PRs. Green exact-SHA CI and separately authorized disposable/live-VPS acceptance are mandatory before release of behavior-changing code. Never alter `stable` directly, merge, publish/tag, update VPS or restart services without separate explicit **owner GO** for that action. A docs/code request does not authorize VPS access or mutation.
 
-Before adding a new subsystem, UI, installer/uninstaller, controller, watcher, multi-stage recovery mechanism, or expensive CI path, apply the [common saymer-alt simplicity rule](https://github.com/saymer-alt/saymer-alt/pull/7): compare (A) the existing/manual workflow, (B) the smallest safe solution, and (C) extended architecture. Choose A/B by default; C needs evidence of need, a maintenance/test-cost estimate and explicit owner approval. If supporting logic grows into its own platform or repeated full E2E runs add no new evidence, STOP expanding and report alternatives. Preserve existing safety invariants, user data, foreign resources and working behavior; this does not authorize refactoring stable code or changing production. [KAS uninstall #225](https://github.com/saymer-alt/keenetic-auto-setup/issues/225) is an **anti-pattern retrospective**, not a template to copy.
+For complex changes follow the [cross-project task contract](https://github.com/saymer-alt/saymer-alt/blob/main/AGENT-TASK-CONTRACT.md): true user intent, checked base SHA, protected scenarios, scope/non-goals, negative tests, approval boundaries and testable acceptance. Do not achieve literal compliance by breaking working routes or user data. For large features use [Proof Before Build](https://github.com/saymer-alt/saymer-alt/blob/main/PROOF-BEFORE-BUILD.md) and compare no change, smallest safe fix and extended system. Avoid speculative refactoring and repeated unrelated licensing audits.
 
-Persistent instructions for AI agents (primarily ZCode) working with this repository.
-This file complements `README.md` and `install.md` rather than duplicating them: README is user documentation
-(architecture, Mihomo TUN configuration, verification, troubleshooting), while this file contains working rules and traps for
-the agent. The project and documentation language is Russian. Owner: `saymer-alt`. Branches: `main` is integration; `stable` is production.
+## Must-preserve VPS and privacy safety
 
-## Purpose
+- **Protect host SSH and routing**: the server's own traffic must NEVER enter `tun-mihomo`. Preserve top-level Mihomo `tun.auto-route: false`, keep project routing in **table 100** (not host `main`), and scope AWG source policy to the detected Docker subnet. Failure can lock out the operator.
+- **Fail closed; no direct WAN escape. No DIRECT fallback.** Before altering source rules, restarting Mihomo/TUN or reconciling routes, retain the independent `AMG_FAILSECURE` FORWARD chain and `unreachable default metric 42760` in table 100. Never flush the guard through an empty/allow window. Only `tun-mihomo` or already-marked legitimate AWG return packets may pass. Distinguish service stopped (possible direct egress) from TUN crashed (blackhole); both require evidence.
+- Preserve WG reply **fwmark `0x88`**, priority **40**, AWG source rule priority **100**, TUN/fake-IP routes, TCPMSS clamp, MASQUERADE, reverse-forward allowance and strict ICMP privacy (`disable-icmp-forwarding: true`). Lost priority-100 rule can expose the real VPS IP. Watchdog must never install a direct fallback; reconcile/repair the **complete** firewall/routes contract, allowing named or numeric table 100 aliases.
+- Keep necessary `rp_filter=0` for asymmetric Docker/TUN traffic, the measured server `gvisor` baseline (unless new verified measurements justify change), MTU/MSS defaults and current IPv4-only behavior. Do not invent IPv6 safety: with `::/0`, IPv6 leakage is possible. Any change to these contracts requires new tests and owner decision.
+- **Fail-fast discovery**, not guesses: missing/ambiguous `amnezia-awg` container, Docker network/subnet, WG port, host interface, TUN or Mihomo config must not trigger default routes or hard-coded guesses. Keep permissions and host context explicit.
+- **Ownership-aware rollback**: protect administrator/foreign `/etc/docker/daemon.json`, `resolv.conf`, `systemd-resolved`, sysctl, `rt_tables`, Mihomo config and other system state. Restore installer-owned data only with verified ownership markers/checksums and no divergence; preserve failed/unproven rollback state for inspection, report failure rather than claiming baseline restored.
+- Mihomo YAML edits must be top-level/path-scoped, preserve unrelated nested fields, filesystem metadata, symlink/hardlink protections, validation and same-filesystem atomic replacement. Never reintroduce global `sed`, shared `/tmp` staging or unvalidated output.
+- Installer heredocs in **`install.sh` are authoritative**; `scripts/` templates may lag and must not be synchronized casually. Generated `oneshot` routing unit uses `RemainAfterExit`; on reinstall explicitly rerun service after daemon reload with barriers already installed, rather than trusting `enable --now` to reconcile.
+- No unapproved live root/SSH/iptables/Docker/sysctl/DNS/firewall/route commands, no removal of foreign resources, no credential disclosure, no bypass of safety gates. CI or synthetic tests **do not** prove SSH recovery, production traffic privacy, live WARP, rollback or absence of leaks.
 
-A one-command installer (bash, root) for VPS hosts: routes traffic from AmneziaWG clients
-(Docker container `amnezia-awg`) through the Mihomo (Clash Meta) TUN interface `tun-mihomo`, so
-clients access the Internet using a Cloudflare WARP IP while the real VPS IP remains hidden.
-Target environment: Debian 12 / Ubuntu 22.04+, systemd, Docker, with Mihomo installed
-(`mihomo.service` or a Docker container). The owner's development host is Windows (Git Bash): project scripts
-run ONLY on the target VPS, never on the development host.
+## Focused agent workflow
 
-## Repository structure
+1. Check current branch/HEAD SHA, existing PRs, task intent and affected source/tests. Read only the topic-specific guide(s), not all project history. For impactful changes review README and target `install.sh` heredocs first.
+2. Use the smallest reversible diff and keep working behavior, generated configuration and foreign state. Do not make unrelated changes or reformat an entire script.
+3. For changes to shell code, run appropriate non-live checks: `bash -n install.sh uninstall.sh doctor.sh`, `sh -n scripts/*.sh`, `shellcheck -S error` when available, tests for fail-secure, installer-reconcile, config patch, watchdog and ownership rollback. The CI matrix is not a replacement for separately approved real VPS acceptance.
+4. Review exact diff and final SHA. Report `PASS`, `FAIL`, `BLOCKED`, `NOT TESTED` distinctly; do not claim live success from unit tests. Stop on risky ambiguity and request owner GO, while continuing authorized read-only repository investigation.
+5. Deliver only a Draft PR for owner review. No automatic `main`/ `stable` merge, tag, release, VPS change or deploy.
 
-| Path | Role |
-|---|---|
-| `install.sh` | Product. Installer v2.0, the single source of truth: target scripts and units are generated by its heredocs |
-| `uninstall.sh` | Removal with ownership-aware rollback: explicit `purge` of iptables/ip rule/terminal route, generated units and scripts, plus ownership-gated restoration of installer-owned Mihomo config, Docker `daemon.json`, `rt_tables`, DNS and sysctl state (see the uninstall entry in "Known inconsistencies") |
-| `doctor.sh` | Read-only rp_filter diagnostic on main: reads runtime and persistent declarations, warns on conflicts/UNKNOWN without reload or writes; does not prove the historical #31 root cause or calculate effective sysctl precedence |
-| `README.md` | Detailed RU documentation: architecture, Mihomo configuration, verification, troubleshooting |
-| `install.md` | Short RU installation guide; the heading "awg-warp-router" is the old project name |
-| `scripts/` | Reference templates of generated scripts with placeholders `<DOCKER_SUBNET>`, `<WG_PORT>`, `<HOST_INTERFACE>`; they are NOT executed and lag behind install.sh (see "Known inconsistencies") |
-| `tests/live/` | Disposable-VPS live-acceptance kit (orchestration/evidence/verification ONLY, no gateway logic): guarded destructive steps (`AMG_DISPOSABLE_TEST_HOST=YES` + `--confirm-disposable` + prior-state refusal + checkpoint/machine-id binding), downloads the PUBLIC stable installer with pinned SHA256, runs baseline → install → DDP proof → repeated install → reboot → uninstall → baseline-compare. `test-kit.sh` (fixture tests, no VPS/root needed) runs in CI. The kit never replaces or patches install.sh/uninstall.sh |
-| `systemd/` | Reference copies of the three units; they match the heredocs in install.sh |
-| `docs/LIVE_AUDIT_2026-09-23.md` | Live VPS evidence ledger and release gates for rollback/firewall work |
-| `LICENSE` | MIT |
+## Read detailed source instructions only when needed
 
-The repository has lightweight GitHub Actions CI. CI deliberately does not emulate a real VPS, Docker, iptables, or live WARP:
-those still require deployment to a test VPS. Automated checks cover shell syntax, ShellCheck errors, regression tests for the Mihomo config patch contract,
-and regression tests for the generated watchdog logic (including named/numeric routing-table aliases and self-heal behavior).
+- [01 — owner decisions, purpose, workflow and technical debt](docs/agent-guidance/01-owner-policy-and-workflow.md): architecture or scope decisions.
+- [02 — file structure, installer sequence and testing](docs/agent-guidance/02-repository-and-install-lifecycle.md): installation/uninstallation and general developer work.
+- [03 — routing invariants, SSH and fail-secure hazard analysis](docs/agent-guidance/03-routing-and-live-safety.md): Docker/Mihomo/TUN/firewall/DNS/watchdog changes.
+- [04 — VPS helper tools and historical inconsistencies](docs/agent-guidance/04-vps-tools-and-historical-cases.md): CLI discovery, legacy behavior, regressions, older measurements.
 
-## Stack and available checks
-
-- `install.sh` / `uninstall.sh` — bash (bash-specific constructs are used: `[[`, `EUID`, color codes).
-- Generated scripts — strict POSIX `/bin/sh` (dash on Debian/Ubuntu).
-- Locally (Git Bash on the development host), only syntax checks are available:
-  `bash -n install.sh && bash -n uninstall.sh` and `sh -n scripts/*.sh`.
-  `shellcheck` — if installed; the project is not fully cleaned up for it, so evaluate warnings on their merits.
-- After changes, run the repository's lightweight checks locally when possible and rely on GitHub Actions for the same
-  non-VPS regression suite. Anything requiring a live VPS (running the full installer, real `ip rule`/iptables behavior,
-  Docker/WARP connectivity, client speed tests) still requires explicit live validation.
-
-## What install.sh does on the target server (in order)
-
-1. Checks root/docker, then performs fail-fast auto-detection (`set -e` + explicit `exit 1`):
-   container by `name=amnezia-awg` (first match), Docker network (prefers a name containing `amnezia`),
-   subnet, WG UDP port (`docker port`, fallback `docker inspect`), default interface.
-2. `/etc/sysctl.d/99-amnezia-mihomo.conf`: `rp_filter=0` (required for gvisor); BBR+fq
-   and `ip_forward=1` are added only when needed on the initial install. If the installer
-   owns these changes (recorded markers), reinstall persists its directives even when the
-   live kernel values are already correct. Externally owned values are not claimed.
-   Also disables rp_filter live on all interfaces.
-3. Table `100 mihomo` in `/etc/iproute2/rt_tables` (if the entry does not exist). The installer records an ownership marker when it adds the entry.
-4. DNS: if systemd-resolved is active, disables it, writes `/etc/resolv.conf`
-   (1.1.1.1 / 8.8.8.8), and applies `chattr +i`.
-5. `/etc/docker/daemon.json` (DNS = docker0) — written ONLY if the file does not exist; an existing file is
-   left untouched (Docker is restarted only in this branch). When the installer creates this file it records ownership,
-   checksum and docker0 gateway in `/var/lib/amnezia-mihomo-gateway`.
-6. Auto-patches the Mihomo config: searches for `config.yaml` in `/etc/mihomo /opt/mihomo /root /home`
-   (maxdepth 3), creates backup `.bak.<epoch>`, stores the exact first pre-install config plus path/checksum metadata
-   in `/var/lib/amnezia-mihomo-gateway`, then applies the Mihomo 1.19.31 contract only to the intended top-level
-   `dns`, `tun`, `profile`, `find-process-mode` and `endpoint-independent-nat` paths. Nested listener/proxy keys
-   are not rewritten. The patcher uses a same-directory temporary file, `flock`, preserves source metadata via
-   `cp --preserve=all`, optionally validates with local `mihomo -t -f`, then replaces the original with a same-filesystem
-   atomic rename. Ambiguous structures (duplicates, inline target mappings, unsupported indentation), symlinks and
-   multi-hardlink config files fail closed instead of being guessed. A missing `profile` section is created; exactly one
-   top-level `dns` and `tun` section is required.
-7. Generates `/usr/local/sbin/warp-docker-routing.sh`. Before touching the source rule it installs two independent
-   fail-secure barriers: terminal `unreachable default metric 42760` in table 100 and the project-owned
-   `AMG_FAILSECURE` FORWARD chain. The chain permits client traffic only through `tun-mihomo` or the already-marked
-   outer AWG reply path; other traffic from the AWG Docker subnet is rejected. The script then waits for `tun-mihomo`,
-   sets `txqueuelen 5000`, installs the preferred TUN default (metric 10), fake-IP route, source/fwmark rules, MARK,
-   TCPMSS, MASQUERADE and reverse FORWARD allowance. Runtime `cleanup` deliberately keeps the guard and terminal
-   route; only explicit `purge` removes the safety barriers during uninstall.
-8. Generates `/usr/local/sbin/check-warp-routing.sh` (watchdog) and three units:
-   `warp-docker-routing.service` (oneshot + `RemainAfterExit`, `ExecStop=cleanup`),
-   `check-warp-routing.service` + `.timer` (checks once per minute, `OnBootSec=2min`).
-9. Installs the fail-secure guard, restarts Mihomo (systemd service or Docker container), runs `daemon-reload`,
-   explicitly enables and restarts `warp-docker-routing.service`, then enables the watchdog timer.
-   The explicit routing-service restart is required on repeated installs because `Type=oneshot` + `RemainAfterExit=yes`
-   remains active and `enable --now` alone does not re-run the newly generated `ExecStart`.
-
-Repeated execution of install.sh is idempotent: a new Mihomo config `.bak` is created, the freshly generated
-routing script is synchronously reconciled even when the oneshot unit was already active, rules are recreated,
-and existing sysctl/DNS values are not duplicated. State tracking is consumed by the production
-`uninstall.sh` ownership-aware rollback: every owned change is restored only with an ownership
-marker plus checksum match, admin-modified state is never overwritten, and an incomplete or
-unproven rollback keeps the state-dir for manual inspection and exits with code 2.
-
-## Core logic (change only with understanding and an owner decision)
-
-- **The main table is not touched**: all policy routing lives in table 100 — this keeps server SSH safe.
-- **`auto-route: false` in Mihomo TUN** is critical: with `true`, Mihomo captures all server traffic
-  and SSH dies.
-- **fwmark 0x88 + priority 40**: WireGuard replies (UDP source port WG_PORT) must leave through main,
-  bypassing the tunnel — otherwise the handshake never completes and clients cannot connect.
-- **Priority 100 / table 100**: removing the rule makes client traffic leave directly using the real
-  VPS IP (de-anonymization), rather than merely "stopping working".
-- **`rp_filter=0`**: with 1, the kernel drops asymmetric packets (docker bridge → TUN).
-- **Fail-secure is independent of the normal TUN route**: table 100 retains a terminal `unreachable default`, while
-  `AMG_FAILSECURE` blocks AWG-subnet forwarding to ordinary WAN unless the packet is the marked outer AWG reply.
-  Losing the TUN route or the source rule must fail closed. Runtime `ExecStop=cleanup` keeps these barriers; only
-  explicit uninstall `purge` may remove them. The watchdog repairs the barriers and must NEVER add a direct fallback route.
-- **Strict ICMP privacy**: Mihomo 1.19.31 with gVisor can create host ICMP sockets outside normal TCP/UDP proxy matching.
-  The project contract therefore requires top-level `tun.disable-icmp-forwarding: true`.
-- **`TCPMSS --clamp-mss-to-pmtu` + `mtu: 1420`**: double encapsulation AWG+WARP; according to
-  the owner's measurements, clamp gives roughly 2x speed. Do not change without new measurements.
-- **An IPv4 address on the TUN is required for the IPv4/NAT scenario**, but on **Mihomo 1.19.31** the top-level `RawTun.Inet4Address` field is not parsed. `parseTun()` derives the effective TUN IPv4 prefix from `dns.fake-ip-range` and forces a `/30` prefix. Do not claim that writing top-level `tun.inet4-address` controls the live address on this version. Per-proxy TUN listeners use a different config path where `inet4-address` is supported.
-- **Server TUN baseline remains `gvisor` (2026-09-21)**: testing was done with **Mihomo 1.19.31**. The owner tested `mips` on three VPS hosts and ran three comparative speed tests on the EE server. Recorded results in that EE test series were 28.9/40.0, 25.8/45.9, and 34.7/47.6 Mbps (download/upload); the owner's practical comparison showed `mips` roughly 10 Mbps worse on download than the current `gvisor` baseline. Do not switch the installer/server baseline to `mips` merely because it is newer or performs well on routers. Re-evaluate only with new VPS measurements after later Mihomo/mipstack updates.
-- **IPv4-only**: IPv6 is not routed; with `::/0` in AWG, an IPv6 leak is possible.
-
-## Dangerous areas (can cut off SSH or break the server)
-
-- Any rule that sends the SERVER'S OWN traffic into `tun-mihomo` (`auto-route: true`,
-  rules without `from <docker-subnet>`, changes to the main table) — loss of SSH access.
-- Application order: the independent fail-secure guard and terminal route must exist BEFORE any source-rule deletion,
-  TUN restart or routing reconciliation. Do not flush the guard chain during a normal reconcile: rebuilding it through
-  an empty state would recreate the exposure window this protection is intended to close.
-- `resolv.conf`, systemd-resolved, `/etc/docker/daemon.json` are system-wide state not
-  owned by this project; preserve the current behavior ("only if absent/active").
-- Mihomo config mutation must remain path-scoped and atomic. Never restore global `sed`/unscoped key replacement,
-  fixed `/tmp/mihomo_config.yaml` staging, or replacement that changes owner/group/mode. Comments are not keys;
-  nested listener/proxy fields must survive unchanged. Unsupported structures must fail before replacing the source file.
-- Source-side forwarding is owned by `AMG_FAILSECURE`; the legacy broad source `FORWARD ... ACCEPT` is removed. The reverse `-d <docker-subnet>` allowance remains for return traffic.
-- Repeated installation must not rely on `systemctl enable --now warp-docker-routing.service` to apply a rewritten
-  oneshot unit/script. With `RemainAfterExit=yes`, an already-active unit is not re-executed. Installer must perform
-  a synchronous routing-service restart after `daemon-reload`, while fail-secure barriers are already installed.
-- The watchdog restarts Mihomo once per minute if `tun-mihomo` is absent and restarts
-  `warp-docker-routing.service` if the gateway topology is incomplete — check changes to this loop for
-  restart loops. Its healthy-state contract includes the source/fwmark rules, preferred TUN default,
-  terminal unreachable and fake-IP routes, the FORWARD hook plus all three `AMG_FAILSECURE` rules,
-  outer-AWG MARK, TCPMSS clamp, TUN MASQUERADE, reverse-destination FORWARD allowance, and absence of
-  the legacy broad source ACCEPT.
-  Table 100 is registered as `100 mihomo`, so `ip rule show` may render the same rule as
-  `lookup mihomo` instead of `lookup 100`; watchdog checks must accept both forms and must
-  re-check the full contract after self-heal before returning success.
-- Do not unify the "service stopped" and "tun-mihomo crashed" scenarios — they have different effects
-  (direct egress vs black hole).
-
-## VPS helper tools and PATH
-
-- When preparing or auditing a new Debian/Ubuntu VPS, do not assume that a CLI tool is absent just because \`command -v <tool>\` or a bare command returns \`command not found\`. User-local installers commonly place binaries in \`~/.local/bin\`, and root's non-login/non-interactive PATH may not include that directory.
-- **warpscout:** before reinstalling it, check both \`command -v warpscout\` and \`~/.local/bin/warpscout\`. The official installer may report that warpscout is already installed in \`/root/.local/bin\` even though typing \`warpscout\` fails.
-- If \`~/.local/bin/warpscout\` exists, use that binary and make \`~/.local/bin\` persistently available in PATH for future administration/automation. Prefer an idempotent PATH change (do not add duplicate PATH entries), then verify in a fresh shell with \`command -v warpscout\` and \`warpscout version\`.
-- This check should be part of future VPS bootstrap/automation work so an agent does not unnecessarily download/reinstall an already present warpscout binary.
-
-## Agent working rules
-
-1. Before changing existing behavior, understand why it exists (the comment at the top of
-   install.sh and the README record measured results), and verify idempotency of repeated
-   installation on an already deployed server.
-2. Do not remove or rewrite working functionality merely to "simplify" code — only do so for
-   an explicit owner task.
-3. Environment values (subnet, WG_PORT, interface, 198.18.0.0/16, table
-   100, fwmark 0x88, priorities 100/40, mtu 1420) must not be changed without understanding their purpose; in
-   heredocs they are substituted from auto-detection — do not hardcode them.
-4. Auto-detection is fail-fast: if container/subnet/port detection fails, the script exits.
-   Do not replace the failure with guesses or defaults.
-5. Before significant changes, reread README.md (the "Mihomo configuration" and
-   "Troubleshooting" sections), the relevant heredocs, and templates. Behavioral changes belong in
-   install.sh — it is the source of truth.
-6. After changes: run `bash -n install.sh`, `bash -n uninstall.sh`, `sh -n scripts/*.sh`,
-   `bash tests/test-mihomo-config-patch.sh`, `bash tests/test-fail-secure.sh`,
-   `bash tests/test-installer-reconcile.sh`, `bash tests/test-watchdog.sh`,
-   and `shellcheck -S error` when available. CI runs the same lightweight
-   checks. Explicitly report which checks were performed and which are possible only on a VPS.
-7. For an ambiguous task, first investigate the repository and state the constraints you found,
-   then ask the owner; do not make assumptions.
-8. Release flow: feature/fix branches -> PR into `main` -> green CI -> live VPS validation when behavior touches routing,
-   installer, systemd, Docker, or Mihomo -> PR `main` -> `stable`. README/install.md point to
-   `raw.githubusercontent.com/.../stable/install.sh`, so only `stable` is the public installer channel.
-   Do not push unvalidated behavioral changes directly to `stable`.
-
-## Known inconsistencies (do not "fix" silently)
-
-- `scripts/warp-docker-routing.sh` lags behind install.sh: commits 8eb641d and cc3ae73 (2026-07-29)
-  changed only install.sh, while the templates are a snapshot from 2026-07-27. The template lacks the FAKE_IP_RANGE route,
-  30-second interface wait, `txqueuelen 5000`, and logger messages. Synchronizing templates is
-  a separate owner decision, not a "small fix".
-- Historical TUN examples used an explicit top-level `inet4-address`, but Mihomo 1.19.31 derives the effective top-level TUN IPv4 prefix from `dns.fake-ip-range`. The installer now removes only the legacy top-level field while preserving per-proxy listener `inet4-address`. Keep future docs/tests tied to the target Mihomo version and live interface evidence.
-- `install.md` is headed with the old name "awg-warp-router".
-- Historical entry, resolved in v2.0.0 (PR #24): pre-#24 `uninstall.sh` claimed "the server returned
-  to standard settings" while leaving installer-owned changes in place. The current uninstaller
-  performs an ownership-aware rollback driven by `/var/lib/amnezia-mihomo-gateway` and its contract is:
-  the Mihomo config is restored to the exact pre-install content only with a proven checksum match
-  and no divergence flag — restoration goes through a temporary file, `mihomo -t -f` validation and a
-  same-filesystem atomic replace, and an admin-modified config is never overwritten; installer-created
-  `/etc/docker/daemon.json` is removed only with the ownership marker plus checksum match; the
-  `100 mihomo` entry is removed from `rt_tables` only with proven ownership and no runtime consumers;
-  `systemd-resolved`/`resolv.conf` are restored only when the DNS state belongs to the installer and
-  the managed state has not diverged, preserving the original resolv.conf semantics (symlink/file/
-  missing) and the immutable attribute; sysctl file and live values (including per-interface
-  `rp_filter`) are restored only with proven ownership — admin-modified values are preserved.
-  On an incomplete or unproven rollback the state-dir is kept for manual inspection and uninstall
-  exits with code 2; pre-existing system state is never removed. Live acceptance ran the full
-  baseline → install → reboot → repeated install → uninstall → baseline-compare cycle on Ubuntu
-  24.04 for the v2.0.0 release; regression coverage lives in `tests/test-ownership-rollback.sh`.
-  See also `docs/LIVE_AUDIT_2026-09-23.md`.
-
-## Technical debt
-
-- Treat technical debt as a separate engineering risk, but do not confuse it with cosmetics, personal style preferences, or merely "ugly" working code.
-- For each debt item, provide evidence first and classify its impact: **High** (breakage/security/data-loss risk or blocks operation), **Medium** (impedes development, creates duplication or logic divergence, or materially increases maintenance cost), **Low** (local complexity with little current risk).
-- Do not refactor for cleanliness alone. Pay down debt when the benefit and risk reduction justify the change; do not rewrite stable, verified code without a concrete reason.
-- Debt fixes must keep minimal scope, preserve existing safety boundaries, and pass the project's normal regression/safety checks. If the fix creates greater risk or new debt, stop and propose a safer alternative.
-- If debt is discovered outside the current task, do not silently expand scope: record the finding and recommendation, and implement it only when it is in scope or explicitly approved by the operator.
-- If debt is discovered outside the current task, do not change code or documentation solely to record the finding. In the final report, state the location, brief description, evidence, **High / Medium / Low** level, risk, and recommended action. If the finding deserves separate tracking, propose creating a GitHub Issue. Create an Issue, add a `TODO`, or change files to record debt only with explicit operator permission. `TODO (TechDebt ...)` is acceptable when such a comment is within the approved scope and is genuinely needed next to the code.
+Dated benchmarks, old incidents and field successes are **not today's machine state or production permission**. Only load history when relevant.

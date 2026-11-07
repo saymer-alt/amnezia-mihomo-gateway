@@ -21,6 +21,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Agent context contract (read-only static guard)
+        run: python3 tests/check-agent-context.py
+
       - name: Syntax checks
         shell: bash
         run: |
